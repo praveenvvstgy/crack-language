@@ -179,14 +179,6 @@ bool Parser::parseBlock(bool nested) {
    }
 }
 
-bool Parser::isBinaryOperator(const Token &tok) {
-   if (tok.isPlus() || tok.isMinus() || tok.isAsterisk() || tok.isSlash() || 
-       tok.isPercent())
-      return true;
-   else
-      return false;
-}
-
 ExprPtr Parser::makeThisRef(const Token &ident) {
    VarDefPtr thisVar = context->lookUp("this");
    if (!thisVar)
@@ -205,7 +197,6 @@ ExprPtr Parser::parsePostIdent(Expr *container, const Token &ident) {
    Token tok1 = toker.getToken();
    if (tok1.isAssign()) {
 
-      // look up the variable
       VarDefPtr var = varContext.lookUp(ident.getData());
       if (!var)
          error(tok1,
@@ -238,8 +229,10 @@ ExprPtr Parser::parsePostIdent(Expr *container, const Token &ident) {
       // function/method invocation
       
       // parse the arg list
-      FuncCall::ExprVector args;
+      FuncCall::ExprVec args;
       parseMethodArgs(args);
+      
+      // look up the variable
       
       // lookup the method from the variable context's type context
       // XXX needs to handle callable objects.
@@ -313,14 +306,14 @@ ExprPtr Parser::parseExpression() {
 	    error(tok, "identifier expected");
 
          expr = parsePostIdent(expr.get(), tok);
-      } else if (isBinaryOperator(tok)) {
+      } else if (tok.isBinOp()) {
          // parse the right-hand-side expression
          ExprPtr rhs = parseExpression();
          
-         FuncCall::ExprVector exprs(2);
+         FuncCall::ExprVec exprs(2);
          exprs[0] = expr;
          exprs[1] = rhs;
-         char name[7] = { 'o', 'p', 'e', 'r', ' ', tok.getData()[0] };
+         std::string name = "oper " + tok.getData();
          FuncDefPtr func = context->lookUp(name, exprs);
          if (!func)
             error(tok,
@@ -347,7 +340,7 @@ ExprPtr Parser::parseExpression() {
 
 // func( arg, arg)
 //      ^         ^
-void Parser::parseMethodArgs(FuncCall::ExprVector &args) {
+void Parser::parseMethodArgs(FuncCall::ExprVec &args) {
      
    Token tok = toker.getToken();
    while (true) {
@@ -406,8 +399,7 @@ void Parser::parseArgDefs(vector<ArgDefPtr> &args) {
       // context (and make sure that the current context is the function 
       // context)
       std::string varName = tok.getData();
-      if (context->lookUp(varName))
-         warn(tok, SPUG_FSTR("Variable " << varName << " redefined."));
+      checkForExistingDef(tok);
 
       // XXX need to check for a default variable assignment
       
@@ -436,10 +428,7 @@ bool Parser::parseDef(TypeDef *type) {
    if (tok2.isIdent()) {
       string varName = tok2.getData();
       // make sure we're not hiding anything else
-      if (context->lookUp(varName))
-         warn(tok2,
-              SPUG_FSTR("Variable " << varName << " redefined." )
-              );
+      checkForExistingDef(tok2);
 
       // this could be a variable or a function
       Token tok3 = toker.getToken();
@@ -569,8 +558,20 @@ bool Parser::parseIfStmt() {
       unexpected(tok, "expected left paren after if");
    
    ExprPtr cond = parseExpression();
-   if (!context->globalData->boolType->matches(*cond->type))
-      error(tok, "Condition is not boolean.");
+   if (!context->globalData->boolType->matches(*cond->type)) {
+      
+      // try to convert to a bool
+      FuncCall::ExprVec args;
+      FuncDefPtr converter = cond->type->context->lookUp("toBool", args);
+      if (converter) {
+         FuncCallPtr convCall = 
+            context->builder.createFuncCall(converter.get());
+         convCall->receiver = cond;
+         cond = convCall.get();
+      } else {
+         error(tok, "Condition is not boolean.");
+      }
+   }
    
    tok = toker.getToken();
    if (!tok.isRParen())
@@ -750,6 +751,7 @@ TypeDefPtr Parser::parseClassDef() {
       parseDef(type.get());
    }
 
+   type->rectify();
    classContext->complete = true;
    classContext->builder.emitEndClass(*classContext);
    cstack.restore();
@@ -763,22 +765,39 @@ void Parser::parse() {
 }
 
 void Parser::checkForExistingDef(const Token &tok) {
+   ContextPtr classContext;
    VarDefPtr existing = context->lookUp(tok.getData());
-   if (existing)
-      // redefinition in the same context is an error, redefinition in a 
-      // nested context is merely a warning.
-      if (existing->context == context)
+   if (existing) {
+      Context *existingContext = existing->context;
+
+      // redefinition in the same context is an error
+      if (existingContext == context)
          error(tok, 
                SPUG_FSTR("Symbol " << tok.getData() <<
-                          "is already defined in this context."
+                          " is already defined in this context."
                          )
                );
-      else
+      // redefinition in a derived context is fine, but if we're not in a 
+      // derived context display a warning.
+      else if (!(classContext = context->getClassContext()) ||
+               !classContext->returnType || !existingContext->returnType ||
+               !existingContext->returnType->matches(*classContext->returnType)
+               ) {
+         if (!classContext)
+            std::cerr << "not in a class context" << std::endl;
+         else if (!classContext->returnType)
+            std::cerr << "class context has no type!" << std::endl;
+         else
+            std::cerr << classContext->returnType->name
+               << " is not derived from " 
+               << existingContext->returnType->name << std::endl;
          warn(tok,
               SPUG_FSTR("Symbol " << tok.getData() << 
-                         "hides another definition in an enclosing context."
+                         " hides another definition in an enclosing context."
                         )
               );
+      }
+   }
 }
 
 void Parser::error(const Token &tok, const std::string &msg) {
