@@ -6,8 +6,10 @@ libcrack_la_SOURCES = \
     parser/Toker.cc \
     parser/ParseError.cc \
     parser/Parser.cc \
+    model/AllocExpr.cc \
     model/AssignExpr.cc \
     model/Context.cc \
+    model/Expr.cc \
     model/FuncCall.cc \
     model/FuncDef.cc \
     model/IntConst.cc \
