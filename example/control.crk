@@ -1,0 +1,23 @@
+int32 true = 1;
+int32 false = 0;
+
+if (true) puts("simple if works!\n");
+
+if (false)
+    puts('failed on simple else');
+else
+    puts ('simple else works\n');
+
+if (true) {
+    puts('complex if works\n');
+} else {
+    puts('complex if failed\n');
+}
+
+if (false) {
+    puts('complex else failed\n');
+} else {
+    puts('complex else works\n');
+}
+
+
