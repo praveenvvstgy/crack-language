@@ -1,0 +1,52 @@
+
+- copyrights
+- fix numeric conversion.
+- composite constructors/destructors
+-   fix cleanups during assignment (a = b does b.bind() but not a.release())
+-   I think that if we do "int32 op byte", it will get converted to "int64 op 
+    int64", which is less than optimal.
+-   cleanup:
+    -   combine FuncDef and OverloadDef into a base class with a virtual 
+        matches() for arg list defs, or just make FuncDef a smaller thing and 
+        always use OverloadDef
+    -   need to be able to define "oper" funcs.  Make "release", "init" and 
+        "bind" oper funcs.
+-   function arguments are currently SSA values, which means this won't work:
+    type func(int a) { a = 100; }
+-   nested compilation so I can write lots of unit tests (shell scripted unit 
+    tests are working just fine)
+
+
+Roadmap
+-------
+
+for 0.1:
+-   allow utf-8 chars for strings and identifiers.  DONE
+-   composition of constructors/destructors
+-   the "oper" keyword
+-   "Foo x = {1, 2}" construction syntax.
+-   the '`' operator
+-   break & continue
+-   short circuit logic operators
+-   floating point types
+-   Should be able to do instance construction in a statement context without 
+    it being misinterpreted as a defitition
+-   empty statements should work: if (false) ;
+-   global variables should not get cleaned up until the end of the program.
+-   multiple inheritence shouldn't cause bad errors (it need not work) DONE 
+    (it now works).
+-   numeric negation: "int j = -i;"
+
+for 1.0:
+-   doc-comments
+-   first class functions (including overload selection: func[Type1, Type2])
+-   keyword arguments
+-   sequence construction 
+-   type inference
+-   for/in loops
+-   exceptions
+-   minor features
+    -   warn the user when an overload hides an earlier overload (foo(String) 
+        following foo(Object), for example).
+
+
