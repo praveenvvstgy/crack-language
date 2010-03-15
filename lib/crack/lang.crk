@@ -1,0 +1,183 @@
+#!/usr/bin/crack
+# Copyright 2010 Google Inc.
+
+import "libc.so.6" free, strlen, strdup, malloc, memcpy, abort;
+
+byteptr malloc(uint size);
+byteptr memcpy(byteptr dest, byteptr src, uint size);
+void free(voidptr mem);
+uint strlen(byteptr buf);
+byteptr strdup(byteptr buf);
+void abort();
+
+bool true = (1 == 1);
+bool false = (1 == 0);
+
+class XWriter : VTableBase {
+    void write(byteptr buf, uint size) {
+        puts("XWriter.write() called.");
+        abort();
+    }
+};
+
+## Base class for things that you don't want derived from object or VTableBase.
+class FreeBase {};
+
+## The Object base class.  Object provides the basic reference counting 
+## mechanism, and most user classes should be derived from it.
+class Object : VTableBase {
+    uint refCount;
+
+    void Object_init() {
+        refCount = 0;
+    }
+
+    oper init() {
+        Object_init();
+    }
+
+    # delete virtual function
+    void del() {}
+
+    oper bind() {
+        refCount = refCount + 1;
+    }
+    
+    oper release() {
+        if (this is null)
+            return;
+
+        refCount = refCount - 1;
+        if (refCount == 0) {
+            del();
+            free(this);
+        }
+    }
+    
+    bool isTrue() {
+        return true;
+    }
+    
+    bool toBool() {
+        if (this is null)
+            return false;
+        else
+            return isTrue();
+    }
+    
+    void writeTo(XWriter writer) {
+        writer.write("<Object>", 8);
+    }
+};
+
+## The buffer base class containing a bytebuf and size.
+class Buffer : Object {
+
+    // buffer and size.
+    uint size;    
+    byteptr buffer;
+
+    ## Initializer.
+    void Buffer_init(byteptr buffer0, uint size0) {
+        # do Object.init()
+        Object_init();
+        buffer = buffer0;
+        size = size0;
+    }
+    
+    oper init(byteptr buffer0, uint size0) {
+        Buffer_init(buffer0, size0);
+    }
+    
+    bool isTrue() {
+        return size;
+    }
+    
+    void writeTo(XWriter writer) {
+        writer.write(buffer, size);
+    }
+};
+
+## A writable buffer.  You can assume that it is safe to write to one of these.
+class WriteBuffer : Buffer {
+    
+    ## constructor inheritence would be nice
+    oper init(byteptr buffer, uint size) {
+        Buffer_init(buffer, size);
+    }
+};
+
+## A managed buffer.  Deletes the bytebuf when it goes out of scope.
+class ManagedBuffer : WriteBuffer {
+
+    oper init(uint size) {
+        Buffer_init(malloc(size), size);
+    }
+    
+    ## Orphan's the byte buffer, returning it for use by the caller.  The 
+    ## caller is responsible for freeing it.
+    byteptr orphan() {
+        temp := buffer;
+        buffer = null;
+        return temp;
+    }
+
+    void del() {
+        if (!(buffer is null))
+            free(buffer);
+    }
+};
+
+## The string class.  Strings are immutable _Buffy's.
+class String : Buffer {
+
+    ## Initialize from a buffer
+    oper init(Buffer buf) {
+        byteptr b = malloc(buf.size);
+        memcpy(b, buf.buffer, buf.size);
+        Buffer_init(b, buf.size);
+    }
+
+    ## Initialize from a WriteBuffer and take ownership (takeOwnership is 
+    ## actually ignored).
+    oper init(ManagedBuffer buf, bool takeOwnership) {
+        size = buf.size;
+        buffer = buf.orphan();
+    }
+    
+    ## Initialize from a null-terminated c-string
+    oper init(byteptr cString) {
+        size = strlen(cString);
+        buffer = malloc(size + 1);
+        memcpy(buffer, cString, size);
+    }
+
+    ## Create an empty string.
+    oper init() {
+        Buffer_init(malloc(0), 0);
+    }
+    
+    void del() {
+        free(buffer);
+    }
+    
+};
+
+class StaticString : String {
+
+    oper init(byteptr data, uint size) {
+        Buffer_init(data, size);
+    }
+    
+    # overrides string delete so we don't try to delete a static buffer.
+    void del() {}
+};
+
+void print(String val) {
+    puts(val.buffer);
+}
+
+void die(String message) {
+    print(message);
+    abort();
+}
