@@ -15,6 +15,7 @@ libcrack_la_SOURCES = \
     model/Expr.cc \
     model/FuncCall.cc \
     model/FuncDef.cc \
+    model/Initializers.cc \
     model/IntConst.cc \
     model/ModuleDef.cc \
     model/NullConst.cc \
@@ -43,3 +44,4 @@ TESTS = test/run_all_tests
 install-cracklib:
 	$(INSTALL) -d $(cracklib)/crack
 	$(INSTALL) lib/crack/lang.crk $(cracklib)/crack
+	$(INSTALL) lib/crack/io.crk $(cracklib)/crack
