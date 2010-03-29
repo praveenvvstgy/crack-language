@@ -1993,7 +1993,7 @@ ResultExprPtr LLVMBuilder::emitFuncCall(Context &context, FuncCall *funcCall) {
         valueArgs.push_back(lastValue);
     }
     
-    if (funcDef->flags & FuncDef::virtualized)
+    if (funcCall->virtualized)
         lastValue = IncompleteVirtualFunc::emitCall(context, funcDef, 
                                                     receiver,
                                                     valueArgs
@@ -2100,7 +2100,11 @@ BranchpointPtr LLVMBuilder::emitIf(Context &context, Expr *cond) {
                                                                  )
                                               );
 
+    context.createCleanupFrame();
     cond->emitCond(context);
+    Value *condVal = lastValue;
+    context.closeCleanupFrame();
+    lastValue = condVal;
     builder.CreateCondBr(lastValue, trueBlock, result->block);
     
     // repoint to the new ("if true") block
@@ -2117,10 +2121,12 @@ BranchpointPtr LLVMBuilder::emitElse(model::Context &context,
     // create a block to come after the else and jump to it from the current 
     // "if true" block.
     BasicBlock *falseBlock = bpos->block;
-    bpos->block = BasicBlock::Create(getGlobalContext(), "cond_end", func);
-    if (!terminal)
+    bpos->block = 0; 
+    if (!terminal) {
+        bpos->block = BasicBlock::Create(getGlobalContext(), "cond_end", func);
         builder.CreateBr(bpos->block);
-    
+    }    
+
     // new block is the "false" condition
     builder.SetInsertPoint(block = falseBlock);
     return pos;
@@ -2133,11 +2139,18 @@ void LLVMBuilder::emitEndIf(Context &context,
     BBranchpoint *bpos = BBranchpointPtr::cast(pos);
 
     // branch from the current block to the next block
-    if (!terminal)
+    if (!terminal) {
+        if (!bpos->block)
+            bpos->block = 
+                BasicBlock::Create(getGlobalContext(), "cond_end", func);
         builder.CreateBr(bpos->block);
 
-    // new block is the next block
-    builder.SetInsertPoint(block = bpos->block);
+    }
+
+    // if we ended up with any non-terminal paths our of the if, the new 
+    // block is the next block
+    if (bpos->block)
+        builder.SetInsertPoint(block = bpos->block);
 }
 
 BranchpointPtr LLVMBuilder::emitBeginWhile(Context &context, 
@@ -2156,7 +2169,11 @@ BranchpointPtr LLVMBuilder::emitBeginWhile(Context &context,
     builder.SetInsertPoint(block = whileCond);
 
     // XXX see notes above on a conditional type.
+    context.createCleanupFrame();
     cond->emitCond(context);
+    Value *condVal = lastValue;
+    context.closeCleanupFrame();
+    lastValue = condVal;
     builder.CreateCondBr(lastValue, whileBody, bpos->block);
 
     // begin generating code in the while body    
@@ -2666,7 +2683,9 @@ IntConstPtr LLVMBuilder::createIntConst(model::Context &context, long val,
                          );
 }
                        
-model::FuncCallPtr LLVMBuilder::createFuncCall(FuncDef *func) {
+model::FuncCallPtr LLVMBuilder::createFuncCall(FuncDef *func, 
+                                               bool squashVirtual
+                                               ) {
     // try to create a BinCmp
     OpDef *specialOp = OpDefPtr::cast(func);
     if (specialOp) {
@@ -2674,7 +2693,7 @@ model::FuncCallPtr LLVMBuilder::createFuncCall(FuncDef *func) {
         return specialOp->createFuncCall();
     } else {
         // normal function call
-        return new FuncCall(func);
+        return new FuncCall(func, squashVirtual);
     }
 }
 
@@ -2722,6 +2741,7 @@ ResultExprPtr LLVMBuilder::emitFieldAssign(Context &context,
     // Otherwise create a fixup.
     if (varContext->complete) {
         Value *fieldRef = builder.CreateStructGEP(aggregateRep, index);
+        narrow(assign->value->type.get(), assign->var->type.get());
         builder.CreateStore(lastValue, fieldRef);
     } else {
         // create a placeholder instruction

@@ -15,6 +15,7 @@
 #include "model/FuncDef.h"
 #include "model/FuncCall.h"
 #include "model/Expr.h"
+#include "model/Initializers.h"
 #include "model/IntConst.h"
 #include "model/ModuleDef.h"
 #include "model/NullConst.h"
@@ -54,6 +55,12 @@ void Parser::unexpected(const Token &tok, const char *userMsg) {
       msg << ", " << userMsg;
 
    error(tok, msg.str());
+}
+
+void Parser::expectToken(Token::Type type, const char *error) {
+   Token tok = toker.getToken();
+   if (tok.getType() != type)
+      unexpected(tok, error);
 }
 
 bool Parser::parseStatement(bool defsAllowed) {
@@ -113,12 +120,7 @@ bool Parser::parseStatement(bool defsAllowed) {
             if (!defsAllowed)
                error(tok, "definition is not allowed in this context.");
             expr = parseExpression();
-            context->createCleanupFrame();
-            VarDefPtr varDef =
-               expr->type->emitVarDef(*context, tok.getData(), expr.get());
-            context->closeCleanupFrame();
-            addDef(varDef.get());
-            context->cleanupFrame->addCleanup(varDef.get());
+            context->emitVarDef(expr->type.get(), tok, expr.get());
             
             // trick the expression processing into not happening
             expr = 0;
@@ -539,7 +541,7 @@ void Parser::parseMethodArgs(FuncCall::ExprVec &args) {
    }
 }
 
-TypeDefPtr Parser::parseTypeSpec() {
+TypeDefPtr Parser::parseTypeSpec(const char *errorMsg) {
    Token tok = toker.getToken();
    if (!tok.isIdent())
       unexpected(tok, "type identifier expected");
@@ -547,7 +549,7 @@ TypeDefPtr Parser::parseTypeSpec() {
    VarDefPtr def = context->lookUp(tok.getData());
    TypeDef *typeDef = TypeDefPtr::rcast(def);
    if (!typeDef)
-      error(tok, SPUG_FSTR(tok.getData() << " is not a type."));
+      error(tok, SPUG_FSTR(tok.getData() << errorMsg));
    
    // XXX need to deal with compound types
    
@@ -593,7 +595,7 @@ void Parser::parseArgDefs(vector<ArgDefPtr> &args) {
       // context (and make sure that the current context is the function 
       // context)
       std::string varName = tok.getData();
-      checkForExistingDef(tok);
+      checkForExistingDef(tok, varName);
 
       // XXX need to check for a default variable assignment
       
@@ -609,6 +611,296 @@ void Parser::parseArgDefs(vector<ArgDefPtr> &args) {
          unexpected(tok, "expected ',' or ')' after argument definition");
    }
 }
+
+// oper init(...) : init1(expr), ... {
+//                 ^                ^
+InitializersPtr Parser::parseInitializers(Expr *receiver) {
+   InitializersPtr inits = new Initializers();
+   ContextPtr classCtx = context->getClassContext();
+   
+   while (true) {
+      // get an identifier
+      Token tok = toker.getToken();
+      if (!tok.isIdent())
+         unexpected(tok, "identifier expected in initializer list.");
+      
+      // try to look up an instance variable
+      VarDefPtr varDef = context->lookUp(tok.getData());
+      if (!varDef || TypeDefPtr::rcast(varDef)) {
+         // not a variable def, parse a type def.
+         toker.putBack(tok);
+         TypeDefPtr base =
+            parseTypeSpec(" is neither a base class nor an instance variable");
+            
+         // try to find it in our base classes
+         if (!classCtx->returnType->isParent(base.get()))
+            error(tok, 
+                  SPUG_FSTR(base->getFullName() << 
+                             " is not a direct base class of " <<
+                             classCtx->returnType->name
+                            )
+                  );
+         
+         // parse the arg list
+         expectToken(Token::lparen, "expected an ergument list.");
+         FuncCall::ExprVec args;
+         parseMethodArgs(args);
+         
+         // look up the appropriate constructor
+         FuncDefPtr operInit = 
+            base->context->lookUp(*context, "oper init", args);
+         if (!operInit || operInit->context != base->context.get())
+            error(tok, SPUG_FSTR("No matching constructor found for " <<
+                                  base->getFullName()
+                                 )
+                  );
+         
+         FuncCallPtr funcCall = context->builder.createFuncCall(operInit.get());
+         funcCall->args = args;
+         funcCall->receiver = receiver;
+         if (!inits->addBaseInitializer(base.get(), funcCall.get()))
+            error(tok, 
+                  SPUG_FSTR("Base class " << base->getFullName() <<
+                             " already initialized."
+                            )
+                  );
+      
+      // make sure that it is a direct member of this class.
+      } else if (varDef->context != classCtx.get()) {
+         error(tok,
+               SPUG_FSTR(tok.getData() << " is not an immediate member of " <<
+                         classCtx->returnType->name
+                         )
+               );
+
+      // make sure that it's an instance variable
+      } else if (!varDef->hasInstSlot()) {
+         error(tok,
+               SPUG_FSTR(tok.getData() << " is not an instance variable.")
+               );
+
+      } else {
+         // this is a normal, member initializer
+   
+         // this will be our initializer
+         ExprPtr initializer;
+   
+         // get the next token
+         Token tok2 = toker.getToken();
+         if (tok2.isLParen()) {
+            // it's a left paren - treat this as a constructor.
+            FuncCall::ExprVec args;
+            parseMethodArgs(args);
+            
+            // look up the appropriate constructor
+            FuncDefPtr operNew = 
+               varDef->type->context->lookUp(*context, "oper new", args);
+            if (!operNew)
+               error(tok2,
+                     SPUG_FSTR("No matching constructor found for instance "
+                                "variable " << varDef->name <<
+                                " of type " << varDef->type->name
+                               )
+                     );
+            
+            // construct a function call
+            FuncCallPtr funcCall;
+            initializer = funcCall =
+               context->builder.createFuncCall(operNew.get());
+            funcCall->args = args;
+            
+         } else if (tok2.isAssign()) {
+            // it's the assignement operator, parse an expression
+            initializer = parseExpression();
+         } else {
+            unexpected(tok2,
+                       "expected constructor arg list or assignment operator"
+                       );
+         }
+         
+         // generate an assignment, add it to the initializers
+         if (!inits->addFieldInitializer(
+               varDef.get(),
+               AssignExpr::create(*context, tok, receiver, varDef.get(), 
+                                  initializer.get()
+                                  ).get()
+              )
+             )
+            error(tok,
+                  SPUG_FSTR("Instance variable " << varDef->name <<
+                            " already initialized."
+                            )
+                  );
+      }
+      
+      // check for a comma
+      tok = toker.getToken();
+      if (!tok.isComma()) {
+         toker.putBack(tok);
+         break;
+      }
+   }
+   
+   return inits;
+}
+
+void Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
+                          const string &name,
+                          Parser::FuncFlags funcFlags,
+                          int expectedArgCount
+                          ) {
+   // check for an existing, non-function definition.
+   VarDefPtr existingDef = checkForExistingDef(nameTok, name, true);
+
+   // if this is a class context, we're defining a method.
+   ContextPtr classCtx = context->getClassContext();
+   bool isMethod = classCtx ? true : false;
+
+   // push a new context, arg defs will be stored in the new context.
+   ContextPtr subCtx = context->createSubContext(Context::local);
+   ContextStackFrame cstack(*this, subCtx.get());
+   context->returnType = returnType;
+   context->toplevel = true;
+   
+   // if this is a method, add the "this" variable
+   ExprPtr receiver;
+   if (isMethod) {
+      assert(classCtx && "method not in class context.");
+      ArgDefPtr argDef =
+         context->builder.createArgDef(classCtx->returnType.get(), 
+                                       "this"
+                                       );
+      addDef(argDef.get());
+      receiver = context->builder.createVarRef(argDef.get());
+   }
+
+   // parse the arguments
+   FuncDef::ArgVec argDefs;
+   parseArgDefs(argDefs);
+   
+   // if we are expecting an argument definition, check for it.
+   if (expectedArgCount > -1 && argDefs.size() != expectedArgCount)
+      error(nameTok, 
+            SPUG_FSTR("Expected " << expectedArgCount <<
+                      " arguments for function " << name
+                      )
+            );
+   
+   Token tok3 = toker.getToken();
+   InitializersPtr inits;
+   if (tok3.isSemi()) {
+      // abstract or forward declaration - see if we've got a stub 
+      // definition
+      StubDef *stub;
+      if (existingDef && (stub = StubDefPtr::rcast(existingDef))) {
+         FuncDefPtr funcDef =
+            context->builder.createExternFunc(*context, FuncDef::noFlags,
+                                              name,
+                                              returnType,
+                                              argDefs,
+                                              stub->address
+                                              );
+         stub->context->removeDef(stub);
+         cstack.restore();
+         addDef(funcDef.get());
+         return;
+      } else {
+         // XXX forward declaration
+         error(tok3, 
+               "abstract/forward declarations are not supported yet");
+      }
+   } else if (funcFlags == hasMemberInits && tok3.isColon()) {
+      inits = parseInitializers(receiver.get());
+      tok3 = toker.getToken();
+   }
+
+   if (!tok3.isLCurly()) {
+      unexpected(tok3, "expected '{' in function definition");
+   }
+
+   bool isVirtual = isMethod && classCtx->returnType->hasVTable && 
+                    !TypeDef::isImplicitFinal(name);
+
+   // If we're overriding/implementing a previously declared virtual 
+   // function, we'll store it here.
+   FuncDefPtr override;
+
+   // XXX need to consolidate FuncDef and OverloadDef
+   // we now need to verify that the new definition doesn't hide an 
+   // existing definition.
+   FuncDef *existingFuncDef = FuncDefPtr::rcast(existingDef);
+   if (existingFuncDef && existingFuncDef->matches(argDefs)) {
+      if (!(context->getDefContext() == existingDef->context) ||
+          !existingFuncDef->isOverridable()
+          )
+         override = existingFuncDef;
+      else
+         error(nameTok,
+               SPUG_FSTR("Definition of " << name <<
+                        "hides previous overload."
+                        )
+               );
+   } else {
+      OverloadDef *existingOvldDef = OverloadDefPtr::rcast(existingDef);
+      if (existingOvldDef && 
+         (override = existingOvldDef->getSigMatch(argDefs)) &&
+         !override->isOverridable()
+         )
+         error(nameTok,
+               SPUG_FSTR("Definition of " << name <<
+                        " hides previous overload."
+                        )
+               );
+
+   }
+   
+   // parse the body
+   FuncDef::Flags flags =
+      (isMethod ? FuncDef::method : FuncDef::noFlags) |
+      (isVirtual ? FuncDef::virtualized : FuncDef::noFlags);
+   FuncDefPtr funcDef =
+      context->builder.emitBeginFunc(*context, flags, name, returnType,
+                                     argDefs,
+                                     override.get()
+                                     );
+
+   // store the new definition in the parent context.
+   {
+      ContextStackFrame cstack(*this, context->parents[0].get());
+      addDef(funcDef.get());
+   }
+
+   // if there were initializers, emit them.
+   if (inits)
+      receiver->type->emitInitializers(*context, inits.get());
+   
+   // if this is an "oper del" with base & member cleanups, store them in the 
+   // current cleanup frame
+   if (funcFlags == hasMemberDels) {
+      assert(classCtx && "emitting a destructor outside of class context");
+      classCtx->returnType->addDestructorCleanups(*context);
+   }
+
+   bool terminal = parseBlock(true);
+   
+   // if the block doesn't always terminate, either give an error or 
+   // return void if the function return type is void
+   if (!terminal)
+      if (context->globalData->voidType->matches(*context->returnType)) {
+         // remove the cleanup stack - we have already done cleanups at 
+         // the block level.
+         context->cleanupFrame = 0;
+         context->builder.emitReturn(*context, 0);
+      } else {
+         // XXX we don't have the closing curly brace location, 
+         // currently reporting the error on the top brace
+         error(tok3, "missing return statement for non-void function.");
+      }
+
+   context->builder.emitEndFunc(*context, funcDef.get());
+   cstack.restore();
+}         
+         
 
 // type var = initializer, var2 ;
 //     ^                         ^
@@ -628,7 +920,7 @@ bool Parser::parseDef(TypeDef *type) {
          // it's a variable.
 
          // make sure we're not hiding anything else
-         checkForExistingDef(tok2);
+         checkForExistingDef(tok2, tok2.getData());
          
          // make sure we've got a default initializer
          if (!type->defaultInitializer)
@@ -636,17 +928,13 @@ bool Parser::parseDef(TypeDef *type) {
          
          // Emit a variable definition and store it in the context (in a 
          // cleanup frame so transient initializers get destroyed here)
-         context->createCleanupFrame();
-         VarDefPtr varDef = type->emitVarDef(*context, varName, 0);
-         context->closeCleanupFrame();
-         addDef(varDef.get());
-         context->cleanupFrame->addCleanup(varDef.get());
+         context->emitVarDef(type, tok2, 0);
          return true;
       } else if (tok3.isAssign()) {
          ExprPtr initializer;
 
          // make sure we're not hiding anything else
-         checkForExistingDef(tok2);
+         checkForExistingDef(tok2, tok2.getData());
 
          // check for a curly brace, indicating construction args.
          Token tok4 = toker.getToken();
@@ -668,143 +956,11 @@ bool Parser::parseDef(TypeDef *type) {
          if (!initializer)
             error(tok4, "Incorrect type for initializer.");
          
-         context->createCleanupFrame();
-         VarDefPtr varDef = type->emitVarDef(*context, varName,
-                                             initializer.get()
-                                             );
-         context->closeCleanupFrame();
-         addDef(varDef.get());
-         context->cleanupFrame->addCleanup(varDef.get());
+         context->emitVarDef(type, tok2, initializer.get());
          return true;
       } else if (tok3.isLParen()) {
          // function definition
-
-         // check for an existing, non-function definition.
-         VarDefPtr existingDef = checkForExistingDef(tok2, true);
-
-         // if this is a class context, we're defining a method.
-         ContextPtr classCtx = context->getClassContext();
-         bool isMethod = classCtx ? true : false;
-
-         // push a new context, arg defs will be stored in the new context.
-         ContextPtr subCtx = context->createSubContext(Context::local);
-         ContextStackFrame cstack(*this, subCtx.get());
-         context->returnType = type;
-         context->toplevel = true;
-         
-         // if this is a method, add the "this" variable
-         if (isMethod) {
-            assert(classCtx && "method not in class context.");
-            ArgDefPtr argDef =
-               context->builder.createArgDef(classCtx->returnType.get(), 
-                                             "this"
-                                             );
-            addDef(argDef.get());
-         }
-
-         // parse the arguments
-         vector<ArgDefPtr> argDefs;
-         parseArgDefs(argDefs);
-         
-         tok3 = toker.getToken();
-         if (tok3.isSemi()) {
-            // abstract or forward declaration - see if we've got a stub 
-            // definition
-            StubDef *stub;
-            if (existingDef && (stub = StubDefPtr::rcast(existingDef))) {
-               FuncDefPtr funcDef =
-                  context->builder.createExternFunc(*context, FuncDef::noFlags,
-                                                    varName,
-                                                    type,
-                                                    argDefs,
-                                                    stub->address
-                                                    );
-               stub->context->removeDef(stub);
-               cstack.restore();
-               addDef(funcDef.get());
-               return true;
-            } else {
-               // XXX forward declaration
-               error(tok3, 
-                     "abstract/forward declarations are not supported yet");
-            }
-         } else if (!tok3.isLCurly()) {
-            unexpected(tok3, "expected '{' in function definition");
-         }
-
-         bool isVirtual = isMethod && classCtx->returnType->hasVTable && 
-                          !TypeDef::isImplicitFinal(varName);
-
-         // If we're overriding/implementing a previously declared virtual 
-         // function, we'll store it here.
-         FuncDefPtr override;
-
-         // XXX need to consolidate FuncDef and OverloadDef
-         // we now need to verify that the new definition doesn't hide an 
-         // existing definition.
-         FuncDef *existingFuncDef = FuncDefPtr::rcast(existingDef);
-         if (existingFuncDef && existingFuncDef->matches(argDefs)) {
-            if (!(context->getDefContext() == existingDef->context) ||
-                !existingFuncDef->isOverridable()
-                )
-               override = existingFuncDef;
-            else
-               error(tok2,
-                     SPUG_FSTR("Definition of " << tok2.getData() <<
-                              " hides previous overload."
-                              )
-                     );
-         } else {
-            OverloadDef *existingOvldDef = OverloadDefPtr::rcast(existingDef);
-            if (existingOvldDef && 
-               (override = existingOvldDef->getSigMatch(argDefs)) &&
-               !override->isOverridable()
-               ) {
-               error(tok2,
-                     SPUG_FSTR("Definition of " << tok2.getData() <<
-                              " hides previous overload."
-                              )
-                     );
-            }
-
-         }
-         
-         // parse the body
-         FuncDef::Flags flags =
-            (isMethod ? FuncDef::method : FuncDef::noFlags) |
-            (isVirtual ? FuncDef::virtualized : FuncDef::noFlags);
-         FuncDefPtr funcDef =
-            context->builder.emitBeginFunc(*context, flags, varName, type,
-                                           argDefs,
-                                           override.get()
-                                           );
-
-         // store the new definition in the parent context.
-         {
-            ContextStackFrame cstack(*this, context->parents[0].get());
-            addDef(funcDef.get());
-         }
-         
-         bool terminal = parseBlock(true);
-         
-         // if the block doesn't always terminate, either give an error or 
-         // return void if the function return type is void
-         if (!terminal)
-            if (context->globalData->voidType->matches(*context->returnType)) {
-               // remove the cleanup stack - we have already done cleanups at 
-               // the block level.
-               context->cleanupFrame = 0;
-               context->builder.emitReturn(*context, 0);
-            } else {
-               // XXX we don't have the closing curly brace location, 
-               // currently reporting the error on the top brace
-               error(tok3, "missing return statement for non-void function.");
-            }
-
-         context->builder.emitEndFunc(*context, funcDef.get());
-         cstack.restore();
-         
-         
+         parseFuncDef(type, tok2, tok2.getData(), normal, -1);
          return true;
       } else {
          unexpected(tok3,
@@ -812,6 +968,10 @@ bool Parser::parseDef(TypeDef *type) {
                     "definition."
                     );
       }
+   } else if (tok2.isOper()) {
+      // deal with an operator
+      parsePostOper(type);
+      return true;
    } else {
       unexpected(tok2, "expected variable definition");
    }
@@ -1010,6 +1170,86 @@ void Parser::parseImportStmt() {
    }
 }
 
+// oper name ( args ) { ... }
+//     ^                     ^
+void Parser::parsePostOper(TypeDef *returnType) {
+
+   Token tok = toker.getToken();
+   if (tok.isIdent()) {
+      const string &ident = tok.getData();
+      bool isInit = ident == "init";
+      if (isInit || ident == "release" || ident == "bind" || ident == "del") {
+         
+         // these can only be defined in an instance context
+         if (context->scope != Context::composite)
+            error(tok, 
+                  SPUG_FSTR("oper " << ident << 
+                             " can only be defined in a class scope."
+                            )
+                  );
+         
+         // these opers must be of type "void"
+         if (!returnType)
+            context->returnType = returnType =
+               context->globalData->voidType.get();
+         else if (returnType != context->globalData->voidType.get())
+            error(tok, 
+                  SPUG_FSTR("oper " << ident << 
+                            " must be of return type 'void'"
+                            )
+                  );
+         expectToken(Token::lparen, "expected argument list");
+         
+         // the operators other than "init" require an empty args list.
+         int expectedArgCount;
+         if (!isInit)
+            expectedArgCount = 0;
+         else
+            expectedArgCount = -1;
+
+         FuncFlags flags;
+         if (isInit)
+            flags = hasMemberInits;
+         else if (ident == "del")
+            flags = hasMemberDels;
+
+         parseFuncDef(returnType, tok, "oper " + ident, flags, 
+                      expectedArgCount
+                      );
+      } else {
+         unexpected(tok, "only 'oper init' honored at this time");
+      }
+
+   } else {
+      
+      // all others require a return type
+      if (!returnType)
+         error(tok, "operator requires a return type");
+
+      if (tok.isLBracket()) {
+         // "oper []" or "oper []="
+         expectToken(Token::rbracket, "expected right bracket.");
+         tok = toker.getToken();
+         if (tok.isAssign()) {
+            expectToken(Token::lparen, "expected argument list.");
+            parseFuncDef(returnType, tok, "oper []=", normal, 2);
+         } else {
+            parseFuncDef(returnType, tok, "oper []", normal, 1);
+         }
+      
+      } else if (tok.isEQ() || tok.isNE() || tok.isLT() || tok.isLE() ||
+                 tok.isGE() || tok.isGT() || tok.isPlus() || tok.isMinus() ||
+                 tok.isSlash() || tok.isAsterisk() || tok.isPercent()
+                 ) {
+         // binary operators
+         expectToken(Token::lparen, "expected argument list.");
+         parseFuncDef(returnType, tok, "oper " + tok.getData(), normal, 2);
+      } else {
+         unexpected(tok, "identifier or symbol expected after 'oper' keyword");
+      }
+   }
+}
+
 // class name : base, base { ... }
 //      ^                         ^
 TypeDefPtr Parser::parseClassDef() {
@@ -1019,7 +1259,7 @@ TypeDefPtr Parser::parseClassDef() {
    string className = tok.getData();
    
    // check for an existing definition of the symbol
-   checkForExistingDef(tok);
+   checkForExistingDef(tok, tok.getData());
 
    // parse base class list   
    vector<TypeDefPtr> bases;
@@ -1094,9 +1334,17 @@ TypeDefPtr Parser::parseClassDef() {
          } else if (tok.isSemi()) {
             continue;
          } else {
+            // deal with this class as the return type var type of the next 
+            // definition.
             toker.putBack(tok);
             parseDef(newType.get());
+            continue;
          }
+      
+      // check for "oper" keyword
+      } else if (tok.isOper()) {
+         parsePostOper(0);
+         continue;
       }
       
       // parse some other kind of definition
@@ -1145,9 +1393,11 @@ void Parser::parse() {
    parseBlock(false);
 }
 
-VarDefPtr Parser::checkForExistingDef(const Token &tok, bool overloadOk) {
+VarDefPtr Parser::checkForExistingDef(const Token &tok, const string &name, 
+                                      bool overloadOk
+                                      ) {
    ContextPtr classContext;
-   VarDefPtr existing = context->lookUp(tok.getData());
+   VarDefPtr existing = context->lookUp(name);
    if (existing) {
       Context *existingContext = existing->context;
 
@@ -1163,7 +1413,7 @@ VarDefPtr Parser::checkForExistingDef(const Token &tok, bool overloadOk) {
       // redefinition in the same context is an error
       if (existingContext == context)
          error(tok, 
-               SPUG_FSTR("Symbol " << tok.getData() <<
+               SPUG_FSTR("Symbol " << name <<
                           " is already defined in this context."
                          )
                );
@@ -1174,7 +1424,7 @@ VarDefPtr Parser::checkForExistingDef(const Token &tok, bool overloadOk) {
                !existingContext->returnType->matches(*classContext->returnType)
                ) {
          warn(tok,
-              SPUG_FSTR("Symbol " << tok.getData() << 
+              SPUG_FSTR("Symbol " << name << 
                          " hides another definition in an enclosing context."
                         )
               );
