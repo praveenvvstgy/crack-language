@@ -45,6 +45,8 @@
 #include <model/TypeDef.h>
 #include <model/VarDef.h>
 #include <model/VarRef.h>
+#include "parser/Parser.h"
+#include "parser/ParseError.h"
 
 
 using namespace builder;
@@ -249,11 +251,12 @@ namespace {
             map<BTypeDef *, Constant *> vtables;
             const Type *firstVTableType;
 
-            BTypeDef(const string &name, const llvm::Type *rep,
+            BTypeDef(TypeDef *metaType, const string &name, 
+                     const llvm::Type *rep,
                      bool pointer = false,
                      unsigned nextVTableSlot = 0
                      ) :
-                model::TypeDef(name, pointer),
+                model::TypeDef(metaType, name, pointer),
                 rep(rep),
                 nextVTableSlot(nextVTableSlot),
                 firstVTableType(0) {
@@ -433,10 +436,6 @@ namespace {
     class BBranchpoint : public model::Branchpoint {
         public:
             BasicBlock *block, *block2;
-            
-            // context has a ref count to this so we use a raw pointer to 
-            // break the cycle.
-            Context *context;
             
             BBranchpoint(BasicBlock *block) : block(block), block2(0) {}
     };
@@ -1064,10 +1063,6 @@ namespace {
     const Type *llvmIntType = 0;
     
     /**
-     * Instruction that does an un-GEP - widens from a base class to a 
-     * derived class.
-     */
-    /**
      * Implements a ResultExpr that tracks the result by storing the Value.
      */
     class BResultExpr : public ResultExpr {
@@ -1293,10 +1288,14 @@ namespace {
             }
     };
 
+    /**
+     * Instruction that does an un-GEP - widens from a base class to a 
+     * derived class.
+     */
     class IncompleteSpecialize : public PlaceholderInstruction {
         private:
             Value *value;
-            BFuncDefPtr funcDef;
+            TypeDef::AncestorPath ancestorPath;
 
         public:
             // allocate space for 1 operand
@@ -1306,15 +1305,16 @@ namespace {
 
             virtual Instruction *clone_impl() const {
                 return new IncompleteSpecialize(getType(), value, 
-                                                funcDef.get()
+                                                ancestorPath
                                                 );
             }
             
             /**
-             * funcDef: the function that specialization is being called in.
+             * ancestorPath: path from the target class to the ancestor that 
+             *  value is referencing an instance of.
              */
             IncompleteSpecialize(const Type *type, Value *value, 
-                                 BFuncDef *funcDef,
+                                 const TypeDef::AncestorPath &ancestorPath,
                                  Instruction *insertBefore = 0
                                  ) :
                 PlaceholderInstruction(
@@ -1324,12 +1324,12 @@ namespace {
                     OperandTraits<IncompleteSpecialize>::operands(this)
                 ),
                 value(value),
-                funcDef(funcDef) {
+                ancestorPath(ancestorPath) {
                 Op<0>() = value;
             }
             
             IncompleteSpecialize(const Type *type, Value *value, 
-                                 BFuncDef *funcDef,
+                                 const TypeDef::AncestorPath &ancestorPath,
                                  BasicBlock *parent
                                  ) :
                 PlaceholderInstruction(
@@ -1339,19 +1339,24 @@ namespace {
                     OperandTraits<IncompleteSpecialize>::operands(this)
                 ),
                 value(value),
-                funcDef(funcDef) {
+                ancestorPath(ancestorPath) {
                 Op<0>() = value;
             }
             
-            virtual void insertInstructions(IRBuilder<> &builder) {
+            static Value *emitSpecializeInner(
+                IRBuilder<> &builder,
+                const Type *type,
+                Value *value,
+                const TypeDef::AncestorPath &ancestorPath
+            ) {
                 // XXX won't work for virtual base classes
                 
                 // create a constant offset from the start of the derived 
                 // class to the start of the base class
                 Value *offset =
                     narrowToAncestor(builder, 
-                                     Constant::getNullValue(getType()),
-                                     funcDef->pathToFirstDeclaration
+                                     Constant::getNullValue(type),
+                                     ancestorPath
                                      );
 
                 // convert to an integer and subtract from the pointer to the 
@@ -1361,8 +1366,49 @@ namespace {
                 value = builder.CreatePtrToInt(value, llvmIntType);
                 Value *derived = builder.CreateSub(value, offset);
                 Value *specialized = 
-                    builder.CreateIntToPtr(derived, getType());
-                replaceAllUsesWith(specialized);
+                    builder.CreateIntToPtr(derived, type);
+                return specialized;
+            }
+            
+            virtual void insertInstructions(IRBuilder<> &builder) {
+                replaceAllUsesWith(emitSpecializeInner(builder,
+                                                       getType(),
+                                                       value,
+                                                       ancestorPath
+                                                       )
+                                   );
+            }
+            
+            // Utility function - emits the specialize instructions if the 
+            // target class is defined, emits a placeholder instruction if it 
+            // is not.
+            static Value *emitSpecialize(
+               Context &context, const Type *type,
+               Value *value,
+               Context &derivedClassCtx,
+               const TypeDef::AncestorPath &ancestorPath
+            ) {
+                LLVMBuilder &llvmBuilder = 
+                    dynamic_cast<LLVMBuilder &>(context.builder);
+                
+                if (derivedClassCtx.complete) {
+                    return emitSpecializeInner(llvmBuilder.builder, type, 
+                                               value,
+                                               ancestorPath
+                                               );
+                } else {
+                    PlaceholderInstruction *placeholder =
+                        new IncompleteSpecialize(type, value, ancestorPath,
+                                                 llvmBuilder.block
+                                                 );
+                    BBuilderContextData *bdata =
+                        BBuilderContextDataPtr::rcast(
+                            derivedClassCtx.builderData
+                        );
+                    bdata->addPlaceholder(placeholder);
+                    return placeholder;
+                }
+                    
             }
     };
     
@@ -1378,6 +1424,13 @@ namespace {
             // the receiver variable
             VarDefPtr receiver;
 
+            // This is lame:  if there is a receiver, "context" 
+            // should be the function context (and include a definition for 
+            // the receiver) and the finish() method should be called with a 
+            // "false" value - indicating that the definition should not be 
+            // stored in the context.
+            // If there is no receiver, it's safe to call this with the 
+            // context in which the definition should be stored.
             FuncBuilder(Context &context, FuncDef::Flags flags,
                         BTypeDef *returnType,
                         const string &name,
@@ -1838,6 +1891,55 @@ namespace {
             }
     };
     
+    class UnsafeCastCall : public FuncCall {
+        public:
+            UnsafeCastCall(FuncDef *def) : 
+                FuncCall(def) {
+            }
+
+            virtual ResultExprPtr emit(Context &context) {
+                // emit the argument
+                args[0]->emit(context)->handleTransient(context);
+
+                LLVMBuilder &builder =
+                    dynamic_cast<LLVMBuilder &>(context.builder);
+                BTypeDef *type = BTypeDefPtr::arcast(func->returnType);
+                builder.lastValue =
+                    builder.builder.CreateBitCast(builder.lastValue,
+                                                  type->rep
+                                                  );
+
+                return new BResultExpr(this, builder.lastValue);
+            }
+    };
+
+    class UnsafeCastDef : public OpDef {
+        public:
+            UnsafeCastDef(TypeDef *resultType) :
+                OpDef(resultType, FuncDef::noFlags, "unsafeCast", 1) {
+                args[0] = new ArgDef(resultType, "val");
+            }
+            
+            // Override "matches()" so that the function matches any single 
+            // argument call.
+            virtual bool matches(Context &context, 
+                                 const std::vector<ExprPtr> &vals,
+                                 std::vector<ExprPtr> &newVals,
+                                 bool convert
+                                 ) {
+                if (vals.size() != 1)
+                    return false;
+                
+                if (convert)
+                    newVals = vals;
+                return true;
+            }
+            
+            virtual FuncCallPtr createFuncCall() {
+                return new UnsafeCastCall(this);
+            }
+    };
+    
 #define QUAL_BINOP(prefix, opCode, op)                                      \
     class prefix##OpCall : public FuncCall {                                \
         public:                                                             \
@@ -1925,7 +2027,7 @@ namespace {
                                               );
         arrayOffset->args[0] = new ArgDef(arrayType, "base");
         arrayOffset->args[1] = new ArgDef(gd->uintType.get(), "offset");
-        context.addDef(arrayOffset.get());
+        context.getDefContext()->addDef(arrayOffset.get());
         
         FuncDefPtr arrayAlloc =
             new GeneralOpDef<ArrayAllocCall>(arrayType, FuncDef::noFlags,
@@ -1938,8 +2040,10 @@ namespace {
 
     class ArrayTypeDef : public BTypeDef {
         public:
-            ArrayTypeDef(const string &name, const Type *rep) :
-                BTypeDef(name, rep) {
+            ArrayTypeDef(TypeDef *metaType, const string &name,
+                         const Type *rep
+                         ) :
+                BTypeDef(metaType, name, rep) {
                 generic = new SpecializationCache();
             }
             
@@ -1961,7 +2065,8 @@ namespace {
                 
                 Type *llvmType = PointerType::getUnqual(parmType->rep);
                 TypeDefPtr tempSpec = 
-                    new BTypeDef(SPUG_FSTR(name << "[" << parmType->name << 
+                    new BTypeDef(type.get(),
+                                 SPUG_FSTR(name << "[" << parmType->name << 
                                             "]"
                                            ),
                                  llvmType
@@ -2005,6 +2110,166 @@ namespace {
         }
     }
 
+    // Create a new meta-class.
+    // context: enclosing context.
+    // name: the original class name.
+    // bases: the base classes.
+    // classImpl: returned impl object for the original class.
+    BTypeDefPtr createMetaClass(Context &context, 
+                                const string &name,
+                                vector<TypeDefPtr> bases,
+                                BGlobalVarDefImplPtr &classImpl
+                                ) {
+        LLVMBuilder &llvmBuilder = 
+            dynamic_cast<LLVMBuilder &>(context.builder);
+        LLVMContext &lctx = getGlobalContext();
+        
+        BTypeDefPtr metaType = 
+            new BTypeDef(context.globalData->classType.get(),
+                         SPUG_FSTR("Class[" << name << "]"),
+                         0,
+                         true,
+                         0
+                         );
+        BTypeDef *classType =
+            BTypeDefPtr::arcast(context.globalData->classType);
+        const PointerType *classPtrType = cast<PointerType>(classType->rep);
+        const StructType *classStructType =
+            cast<StructType>(classPtrType->getElementType());
+        Context *classTypeCtx = classType->context.get();
+        metaType->context = new Context(context.builder, Context::instance,
+                                        classTypeCtx
+                                        );
+        metaType->context->returnType = metaType;
+        
+        // Create a struct representation of the meta class.  This just has the 
+        // Class class as its only field.
+        vector<const Type *> fields(1);
+        fields[0] = classStructType;
+        const StructType *metaClassStructType = StructType::get(lctx, fields);
+        const Type *metaClassPtrType =
+            PointerType::getUnqual(metaClassStructType);
+        metaType->rep = metaClassPtrType;
+        metaType->context->complete = true;
+        
+        // create a global variable holding the class object.
+        vector<Constant *> classStructVals(3);
+    
+        Constant *zero = ConstantInt::get(Type::getInt32Ty(lctx), 0);
+        Constant *index00[] = { zero, zero }; 
+        
+        // name
+        Constant *nameInit = ConstantArray::get(lctx, name, true);
+        GlobalVariable *nameGVar =
+            new GlobalVariable(*llvmBuilder.module,
+                               nameInit->getType(),
+                               true, // is constant
+                               GlobalValue::ExternalLinkage,
+                               nameInit,
+                               name + ":name"
+                               );
+        classStructVals[0] =
+            ConstantExpr::getGetElementPtr(nameGVar, index00, 2);
+        
+        // numBases
+        const Type *uintType =
+            BTypeDefPtr::arcast(context.globalData->uintType)->rep;
+        classStructVals[1] = ConstantInt::get(uintType, bases.size());
+        
+        // bases
+        vector<Constant *> basesVal(bases.size());
+        for (int i = 0; i < bases.size(); ++i) {
+            // get the pointer to the inner "Class" object of "Class[BaseName]"
+            BGlobalVarDefImplPtr impl =
+                BGlobalVarDefImplPtr::arcast(
+                    BTypeDefPtr::arcast(bases[i])->impl
+                );
+            
+            // extract the initializer from the rep (which is the global 
+            // variable for the _pointer_ to the class) and then GEP our way 
+            // into the base class (Class) instance.
+            Constant *baseClassPtr = impl->rep->getInitializer();
+            Constant *baseAsClass =
+                ConstantExpr::getGetElementPtr(baseClassPtr, index00, 2);
+            basesVal[i] = baseAsClass;
+        }
+        const ArrayType *baseArrayType =
+            ArrayType::get(classType->rep, bases.size());
+        Constant *baseArrayInit = ConstantArray::get(baseArrayType, basesVal);
+        GlobalVariable *basesGVar =
+            new GlobalVariable(*llvmBuilder.module,
+                               baseArrayType,
+                               true, // is constant
+                               GlobalValue::ExternalLinkage,
+                               baseArrayInit,
+                               name + ":bases"
+                               );
+        classStructVals[2] = ConstantExpr::getGetElementPtr(basesGVar, index00,
+                                                            2
+                                                            );
+        
+        // build the instance of Class
+        Constant *classStruct =
+            ConstantStruct::get(classStructType, classStructVals);
+        
+        // the new meta class's structure is another structure with only 
+        // Class as a member.
+        vector<Constant *> metaClassStructVals(1);
+        metaClassStructVals[0] = classStruct;
+        Constant *classObjVal =
+            ConstantStruct::get(metaClassStructType, metaClassStructVals);
+    
+        // Create the class global variable
+        GlobalVariable *classInst = 
+            new GlobalVariable(*llvmBuilder.module,
+                               metaClassStructType,
+                               true, // is constant
+                               GlobalValue::ExternalLinkage,
+                               classObjVal,
+                               name + ":body"
+                               );
+        
+        // create the pointer to the class instance
+        GlobalVariable *classInstPtr =
+            new GlobalVariable(*llvmBuilder.module,
+                               metaClassPtrType,
+                               true, // is constant
+                               GlobalVariable::ExternalLinkage,
+                               classInst,
+                               name
+                               );
+    
+        classImpl = new BGlobalVarDefImpl(classInstPtr);
+        return metaType;
+    }
+
+    // Prepares a function "func" to act as an override for "override"
+    unsigned wrapOverride(TypeDef *classType, BFuncDef *overriden, 
+                          FuncBuilder &funcBuilder
+                          ) {
+        // find the path to the overriden's class
+        BTypeDef *overridenClass =
+            BTypeDefPtr::arcast(overriden->context->returnType);
+        classType->getPathToAncestor(
+            *overridenClass, 
+            funcBuilder.funcDef->pathToFirstDeclaration
+        );
+        
+        // augment it with the path from the overriden to its first 
+        // declaration.
+        funcBuilder.funcDef->pathToFirstDeclaration.insert(
+            funcBuilder.funcDef->pathToFirstDeclaration.end(),
+            overriden->pathToFirstDeclaration.begin(),
+            overriden->pathToFirstDeclaration.end()
+        );
+
+        // the type of the receiver is that of its first declaration                
+        BTypeDef *receiverClass = overriden->getReceiverType();
+        funcBuilder.setReceiverType(receiverClass);
+
+        funcBuilder.funcDef->vtableSlot = overriden->vtableSlot;
+        return overriden->vtableSlot;
+    }
 
 } // anon namespace
 
@@ -2063,6 +2328,7 @@ void LLVMBuilder::narrow(TypeDef *curType, TypeDef *ancestor) {
         bdata->addPlaceholder(placeholder);
     }
 }
+
 Function *LLVMBuilder::getModFunc(FuncDef *funcDef) {
     ModFuncMap::iterator iter = moduleFuncs.find(funcDef);
     if (iter == moduleFuncs.end()) {
@@ -2074,7 +2340,7 @@ Function *LLVMBuilder::getModFunc(FuncDef *funcDef) {
                                           bfuncDef->name,
                                           module
                                           );
-        execEng->addGlobalMapping(func, 
+        execEng->addGlobalMapping(func,
                                   execEng->getPointerToFunction(bfuncDef->rep)
                                   );
         
@@ -2123,7 +2389,9 @@ TypeDef *LLVMBuilder::getFuncType(Context &context,
         return TypeDefPtr::rcast(iter->second);
 
     // nope.  create a new type object and store it
-    BTypeDefPtr crkFuncType = new BTypeDef("", llvmFuncType);
+    BTypeDefPtr crkFuncType = new BTypeDef(context.globalData->classType.get(), "", 
+                                           llvmFuncType
+                                           );
     funcTypes[llvmFuncType] = crkFuncType;
     
     // Give it a context and an "oper to voidptr" method.
@@ -2137,7 +2405,6 @@ TypeDef *LLVMBuilder::getFuncType(Context &context,
     
     return crkFuncType.get();
 }
-        
 
 LLVMBuilder::LLVMBuilder() :
     module(0),
@@ -2393,11 +2660,14 @@ BranchpointPtr LLVMBuilder::emitBeginWhile(Context &context,
     return bpos;
 }
 
-void LLVMBuilder::emitEndWhile(Context &context, Branchpoint *pos) {
+void LLVMBuilder::emitEndWhile(Context &context, Branchpoint *pos, 
+                               bool isTerminal
+                               ) {
     BBranchpoint *bpos = BBranchpointPtr::cast(pos);
 
     // emit the branch back to conditional expression in the block
-    builder.CreateBr(bpos->block2);
+    if (!isTerminal)
+        builder.CreateBr(bpos->block2);
 
     // new code goes to the following block
     builder.SetInsertPoint(block = bpos->block);
@@ -2449,28 +2719,10 @@ FuncDefPtr LLVMBuilder::emitBeginFunc(Context &context,
         if (flags & FuncDef::virtualized)
             // use the original's slot if this is an override.
             if (override) {
-                
-                // find the path to the override's class
-                BTypeDef *overrideClass =
-                    BTypeDefPtr::arcast(override->context->returnType);
-                classType->getPathToAncestor(*overrideClass, 
-                                             funcDef->pathToFirstDeclaration
-                                             );
-                
-                // augment it with the path from the override to its first 
-                // declaration.
-                BFuncDef *boverride = BFuncDefPtr::acast(override);
-                f.funcDef->pathToFirstDeclaration.insert(
-                    funcDef->pathToFirstDeclaration.end(),
-                    boverride->pathToFirstDeclaration.begin(),
-                    boverride->pathToFirstDeclaration.end()
-                );
-
-                // the type of the receiver is that of its first declaration                
-                BTypeDef *receiverClass = boverride->getReceiverType();
-                f.setReceiverType(receiverClass);
-                
-                vtableSlot = boverride->vtableSlot;
+                vtableSlot = wrapOverride(classType, 
+                                          BFuncDefPtr::acast(override), 
+                                          f
+                                          );                
             } else {
                 vtableSlot = classType->nextVTableSlot++;
                 f.setReceiverType(classType);
@@ -2491,14 +2743,18 @@ FuncDefPtr LLVMBuilder::emitBeginFunc(Context &context,
         // instance to the method's class instance.
         Value *inst = 
             dynamic_cast<BArgVarDefImpl *>(f.receiver->impl.get())->rep;
-        PlaceholderInstruction *placeholder =
-            new IncompleteSpecialize(classType->rep, inst, funcDef, block);
-        classContextData->addPlaceholder(placeholder);
-
+        Context *classCtx = context.getClassContext().get();
+        Value *thisRep =
+            IncompleteSpecialize::emitSpecialize(context, 
+                                                 classType->rep,
+                                                 inst, 
+                                                 *classCtx,
+                                                 funcDef->pathToFirstDeclaration
+                                                 );
         // lookup the "this" variable, and replace its rep
         VarDefPtr thisVar = context.lookUp("this");
         BArgVarDefImpl *thisImpl = BArgVarDefImplPtr::arcast(thisVar->impl);
-        thisImpl->rep = placeholder;
+        thisImpl->rep = thisRep;
     }
     
     return f.funcDef;
@@ -2535,13 +2791,59 @@ FuncDefPtr LLVMBuilder::createExternFunc(Context &context,
     return f.funcDef;
 }
 
+namespace {
+    void createOperClassFunc(Context &context,
+                             BTypeDef *objClass,
+                             BTypeDef *metaClass
+                             ) {
+
+        // build a local context to hold the "this"
+        Context localCtx(context.builder, Context::local, &context);
+        localCtx.addDef(new ArgDef(objClass, "this"));
+
+        FuncBuilder funcBuilder(localCtx,
+                                FuncDef::method | FuncDef::virtualized,
+                                metaClass,
+                                "oper class",
+                                0
+                                );
+        funcBuilder.setReceiverType(objClass);
+
+        // if this is an override, do the wrapping.
+        FuncDefPtr override = context.lookUpNoArgs("oper class");
+        if (override)
+            wrapOverride(objClass, BFuncDefPtr::arcast(override), funcBuilder);
+        else
+            funcBuilder.funcDef->vtableSlot = objClass->nextVTableSlot++;
+
+        funcBuilder.finish(false);
+        context.addDef(funcBuilder.funcDef.get());
+
+        BasicBlock *block = BasicBlock::Create(getGlobalContext(),
+                                               "oper class", 
+                                               funcBuilder.funcDef->rep
+                                               );
+        
+        // body of the function: load the global variable and return it.
+        IRBuilder<> builder(block);
+        BGlobalVarDefImpl *impl = 
+            BGlobalVarDefImplPtr::arcast(objClass->impl);
+        Value *val = builder.CreateLoad(impl->rep);
+        builder.CreateRet(val);
+    }
+}
+
 TypeDefPtr LLVMBuilder::emitBeginClass(Context &context,
                                        const string &name,
                                        const vector<TypeDefPtr> &bases) {
     assert(!context.builderData);
     BBuilderContextData *bdata;
     context.builderData = bdata = new BBuilderContextData();
-    
+
+    // create the meta-class
+    BGlobalVarDefImplPtr classImpl;
+    BTypeDefPtr metaType = createMetaClass(context, name, bases, classImpl);
+
     // process the base classes, get the first base class with a vtable
     BTypeDef *baseWithVTable = 0;
     for (vector<TypeDefPtr>::const_iterator iter = bases.begin();
@@ -2554,15 +2856,47 @@ TypeDefPtr LLVMBuilder::emitBeginClass(Context &context,
             baseWithVTable = base;
     }
     
-    OpaqueType *opaque = OpaqueType::get(getGlobalContext());
-    bdata->type = new BTypeDef(name, PointerType::getUnqual(opaque), true,
+    // create the class definition (for classes with no bases, start with 
+    // vtable slot 1: slot 0 is the "oper class" function)
+    const Type *opaque = OpaqueType::get(getGlobalContext());
+    bdata->type = new BTypeDef(metaType.get(), name, 
+                               PointerType::getUnqual(opaque),
+                               true,
                                baseWithVTable ? 
                                 baseWithVTable->nextVTableSlot : 0
                                );
     bdata->type->defaultInitializer = new NullConst(bdata->type.get());
     
+    // bind the class to its context and the context to its class
+    bdata->type->context = &context;
+    context.returnType = bdata->type;
+    
+    // tie the meta-class to the class
+    metaType->meta = bdata->type.get();
+    
+    // Make the pointer global variable our impl
+    bdata->type->impl = classImpl;
+
+    // create the unsafeCast() function.
+    metaType->context->addDef(new UnsafeCastDef(bdata->type.get()));
+    
     // create function to convert to voidptr
     context.addDef(new VoidPtrOpDef(context.globalData->voidPtrType.get()));
+
+    // create the "oper class" function - currently returns voidptr, but 
+    // that's good enough for now.
+    if (baseWithVTable)
+        createOperClassFunc(context, bdata->type.get(), metaType.get());
+
+#if 0
+    // create the safe cast function.
+    if (context.globalData->objectType)
+        metaType->context->addDef(new CastDef(bdata->type.get(), 
+                                              context.globalData->objectType
+                                              )
+                                  );
+#endif
+
     return bdata->type.get();
 }
         
@@ -2815,6 +3149,13 @@ ModuleDefPtr LLVMBuilder::createModule(Context &context, const string &name) {
         f.finish();
     }
     
+    // create "void __die(byteptr message)"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidType, "__die", 1);
+        f.addArg("message", byteptrType);
+        f.finish();
+    }
+    
     // bind the module to the execution engine
     bindModule(module);
     
@@ -2987,11 +3328,19 @@ extern "C" void printint(int val) {
     std::cout << val << flush;
 }
 
+extern "C" void __die(const char *message) {
+    std::cout << message << endl;
+    abort();
+}
+
 namespace {
     BTypeDef *createIntPrimType(Context &context, const Type *llvmType,
-                             const char *name
-                             ) {
-        BTypeDefPtr btype = new BTypeDef(name, llvmType);
+                                const char *name
+                                ) {
+        BTypeDefPtr btype = new BTypeDef(context.globalData->classType.get(), 
+                                         name, 
+                                         llvmType
+                                         );
         btype->defaultInitializer =
             context.builder.createIntConst(context, 0, btype.get());
         btype->context =
@@ -3011,6 +3360,82 @@ namespace {
     }
 }
 
+namespace {
+    void finishClassType(Context &context, BTypeDef *classType) {
+        // for the kinds of things we're about to do, we need a global block 
+        // for functions to restore to, and for that we need a function and 
+        // module.
+        LLVMContext &lctx = getGlobalContext();
+        LLVMBuilder &builder = dynamic_cast<LLVMBuilder &>(context.builder);
+        builder.module = new Module("<builtin>", lctx);
+        vector<const Type *> argTypes;
+        FunctionType *voidFuncNoArgs =
+            FunctionType::get(Type::getVoidTy(lctx), argTypes, false);
+        Function *func = Function::Create(voidFuncNoArgs,
+                                          Function::ExternalLinkage,
+                                          "__builtin_init__",
+                                          builder.module
+                                          );
+        func->setCallingConv(llvm::CallingConv::C);
+        builder.block =
+            BasicBlock::Create(lctx, "__builtin_init__", builder.func);
+
+        // add "Class"
+        int lineNum = __LINE__ + 1;
+        string temp("    byteptr name;\n"
+                    "    uint numBases;\n"
+                    "    array[Class] bases = null;\n"
+                    "    bool isSubclass(Class other) {\n"
+                    "        if (this is other)\n"
+                    "            return (1==1);\n"
+                    "        uint i;\n"
+                    "        while (i < numBases) {\n"
+                    "            if (bases[i].isSubclass(other))\n"
+                    "                return (1==1);\n"
+                    "            i = i + 1;\n"
+                    "        }\n"
+                    "        return (1==0);\n"
+                    "    }\n"
+                    "}\n"
+                    );
+        ContextPtr lexicalContext = new Context(context.builder, 
+                                                Context::composite,
+                                                context.globalData
+                                                );
+        lexicalContext->parents.push_back(classType->context);
+        lexicalContext->parents.push_back(&context);
+        BBuilderContextData *bdata;
+        classType->context->builderData = bdata = new BBuilderContextData();
+        bdata->type = classType;
+        
+        istringstream src(temp);
+        try {
+            parser::Toker toker(src, "<builtin>", lineNum);
+            parser::Parser p(toker, lexicalContext.get());
+            p.parseClassBody();
+        } catch (parser::ParseError &ex) {
+            std::cerr << ex << endl;
+            assert(false);
+        }
+        
+        // let the "end class" emitter handle the rest of this.
+        context.builder.emitEndClass(*classType->context);
+        
+        // close off the block.
+        builder.builder.CreateRetVoid();
+    }
+
+    void fixMeta(Context &context, TypeDef *type) {
+        BTypeDefPtr metaType;
+        BGlobalVarDefImplPtr classImpl;
+        vector<TypeDefPtr> noBases;
+        type->type = metaType =
+            createMetaClass(context, type->name, noBases, classImpl);
+        metaType->meta = type;
+        type->impl = classImpl;
+    }
+}
+
 void LLVMBuilder::registerPrimFuncs(model::Context &context) {
     
     Context::GlobalData *gd = context.globalData;
@@ -3018,22 +3443,46 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
 
     // create the basic types
     
+    BTypeDef *classType;
+    Type *classTypeRep = OpaqueType::get(lctx);
+    Type *classTypePtrRep = PointerType::getUnqual(classTypeRep);
+    gd->classType = classType = new BTypeDef(0, "Class", classTypePtrRep);
+    classType->type = classType;
+    classType->meta = classType;
+    classType->context = new Context(*this, Context::instance, gd);
+    classType->context->returnType = classType;
+    context.addDef(classType);
+
+    // some tools for creating meta-classes
+    BTypeDefPtr metaType;           // storage for meta-types
+    BGlobalVarDefImplPtr classImpl; // storage for class impls
+    vector<TypeDefPtr> noBases;     // empty base class list
+    
     BTypeDef *voidType;
-    gd->voidType = voidType = new BTypeDef("void", Type::getVoidTy(lctx));
+    gd->voidType = voidType = new BTypeDef(context.globalData->classType.get(), 
+                                           "void", 
+                                           Type::getVoidTy(lctx)
+                                           );
     voidType->context = new Context(*this, Context::instance, gd);
     context.addDef(voidType);
-    
+
     BTypeDef *voidPtrType;
     llvmVoidPtrType = 
         PointerType::getUnqual(OpaqueType::get(getGlobalContext()));
-    gd->voidPtrType = voidPtrType = new BTypeDef("voidptr", llvmVoidPtrType);
+    gd->voidPtrType = voidPtrType = new BTypeDef(context.globalData->classType.get(), 
+                                                 "voidptr", 
+                                                 llvmVoidPtrType
+                                                 );
     voidPtrType->context = new Context(*this, Context::instance, gd);
     context.addDef(voidPtrType);
     
     llvm::Type *llvmBytePtrType = 
         PointerType::getUnqual(Type::getInt8Ty(lctx));
     BTypeDef *byteptrType;
-    gd->byteptrType = byteptrType = new BTypeDef("byteptr", llvmBytePtrType);
+    gd->byteptrType = byteptrType = new BTypeDef(context.globalData->classType.get(), 
+                                                 "byteptr", 
+                                                 llvmBytePtrType
+                                                 );
     byteptrType->defaultInitializer = createStrConst(context, "");
     byteptrType->context = new Context(*this, Context::instance, gd);
     byteptrType->context->returnType = byteptrType;
@@ -3044,7 +3493,10 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
     
     const Type *llvmBoolType = IntegerType::getInt1Ty(lctx);
     BTypeDef *boolType;
-    gd->boolType = boolType = new BTypeDef("bool", llvmBoolType);
+    gd->boolType = boolType = new BTypeDef(context.globalData->classType.get(), 
+                                           "bool", 
+                                           llvmBoolType
+                                           );
     gd->boolType->defaultInitializer = new BIntConst(boolType, 0);
     boolType->context = new Context(*this, Context::instance, gd);
     boolType->context->returnType = boolType;
@@ -3090,42 +3542,6 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
         llvmIntType = int64Type->rep;
     }
 
-    // create OverloadDef's type
-    BTypeDefPtr overloadDef = new BTypeDef("", 0);
-        
-    // Give it a context and an "oper to voidptr" method.
-    overloadDef->context =
-        new Context(context.builder, Context::instance,
-                    context.globalData
-                    );
-    overloadDef->context->addDef(
-        new VoidPtrOpDef(context.globalData->voidPtrType.get())
-    );
-    gd->overloadType = overloadDef;
-    
-    // create the array generic
-    TypeDefPtr arrayType = new ArrayTypeDef("array", 0);
-    arrayType->context = new Context(context.builder, Context::instance,
-                                     context.globalData
-                                     );
-    context.addDef(arrayType.get());
-
-    // create an empty structure type and its pointer for VTableBase 
-    // Actual type is {}** (another layer of pointer indirection) because 
-    // classes need to be pointer types.
-    vector<const Type *> members;
-    Type *vtableType = StructType::get(getGlobalContext(), members);
-    Type *vtablePtrType = PointerType::getUnqual(vtableType);
-    BTypeDef *vtableBaseType;
-    gd->vtableBaseType = vtableBaseType =
-        new BTypeDef("VTableBase", PointerType::getUnqual(vtablePtrType), 
-                     true
-                     );
-    vtableBaseType->hasVTable = true;
-    vtableBaseType->context = new Context(*this, Context::instance, gd);
-    vtableBaseType->context->returnType = vtableBaseType;
-    context.addDef(vtableBaseType);
-    
     // create integer operations
     context.addDef(new AddOpDef(int64Type));
     context.addDef(new SubOpDef(int64Type));
@@ -3227,6 +3643,70 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
     uint32Type->context->addDef(new ZExtOpDef(uint64Type, "oper to uint64"));
     uint32Type->context->addDef(new ZExtOpDef(int64Type, "oper to int64"));
     
+    // create the array generic
+    TypeDefPtr arrayType = new ArrayTypeDef(context.globalData->classType.get(),
+                                            "array", 
+                                            0
+                                            );
+    arrayType->context = new Context(context.builder, Context::instance,
+                                     context.globalData
+                                     );
+    context.addDef(arrayType.get());
+
+    // now that we have byteptr and array and all of the integer types, we can
+    // initialize the body of Class.
+    context.addDef(new IsOpDef(classType, boolType));
+    finishClassType(context, classType);
+    
+    // back-fill meta class and impls for the existing primitives
+    fixMeta(context, voidType);
+    fixMeta(context, voidPtrType);
+    fixMeta(context, boolType);
+    fixMeta(context, byteType);
+    fixMeta(context, int32Type);
+    fixMeta(context, int64Type);
+    fixMeta(context, uint32Type);
+    fixMeta(context, uint64Type);
+    fixMeta(context, arrayType.get());
+
+    // create OverloadDef's type
+    metaType = createMetaClass(context, "Overload", noBases, classImpl);
+    BTypeDefPtr overloadDef = new BTypeDef(metaType.get(), "Overload",
+                                           0
+                                           );
+    metaType->meta = overloadDef.get();
+    metaType->impl = classImpl;
+        
+    // Give it a context and an "oper to voidptr" method.
+    overloadDef->context =
+        new Context(context.builder, Context::instance,
+                    context.globalData
+                    );
+    overloadDef->context->addDef(
+        new VoidPtrOpDef(context.globalData->voidPtrType.get())
+    );
+    gd->overloadType = overloadDef;
+    
+    // create an empty structure type and its pointer for VTableBase 
+    // Actual type is {}** (another layer of pointer indirection) because 
+    // classes need to be pointer types.
+    vector<const Type *> members;
+    Type *vtableType = StructType::get(getGlobalContext(), members);
+    Type *vtablePtrType = PointerType::getUnqual(vtableType);
+    metaType = createMetaClass(context, "VTableBase", noBases, classImpl);
+    BTypeDef *vtableBaseType;
+    gd->vtableBaseType = vtableBaseType =
+        new BTypeDef(metaType.get(), "VTableBase", 
+                     PointerType::getUnqual(vtablePtrType), 
+                     true
+                     );
+    vtableBaseType->hasVTable = true;
+    vtableBaseType->context = new Context(*this, Context::instance, gd);
+    vtableBaseType->context->returnType = vtableBaseType;
+    vtableBaseType->impl = classImpl;
+    metaType->meta = vtableBaseType;
+    context.addDef(vtableBaseType);
+    
     // pointer equality check (to allow checking for None)
     context.addDef(new IsOpDef(voidPtrType, boolType));
     context.addDef(new IsOpDef(byteptrType, boolType));
@@ -3235,7 +3715,7 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
     context.addDef(new BitNotOpDef(boolType, "oper !"));
     
     // byteptr array indexing
-    addArrayMethods(context, byteptrType, byteType);
+    addArrayMethods(context, byteptrType, byteType);    
 }
 
 void LLVMBuilder::loadSharedLibrary(const string &name,

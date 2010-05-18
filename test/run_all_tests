@@ -458,6 +458,72 @@ test_output 'initializer constructor sugar' \
 
 test_output 'break and continue' 'import test.test_break;' ok
 
+test_output 'break scope limited to loop' \
+    'while (1) break;
+    break;' \
+    "${parseError}2: Break can only be used in the body of a while, for or \
+switch statement."
+
+test_output 'error on dead code' \
+    'while (1) { break; puts("fail"); }' \
+    "${parseError}1: unreachable code"
+
+test_output 'correct propagation of break terminal contexts' \
+    'while (1) { if (0) break; else break;
+                 puts("fail"); }' \
+    "${parseError}2: unreachable code"
+
+test_output 'correct propagation of return terminal contexts' \
+    'void func() { if (1) { if (0) return; else return; } else return;
+                   puts("fail"); }' \
+    "${parseError}2: unreachable code"
+
+test_output 'semicolons unnecessary after classes, null statements' \
+    'class A {} if (1) ; if (1) ; else ; if (1) {;;;} puts("ok")' \
+    ok
+
+test_output 'explicit calls of base class functions' \
+    'class A : VTableBase { void f() { puts("ok"); } }
+     class B : A { void f() { (A.f()); } }
+     B b; b.f()' \
+     ok
+
+test_output 'error on explicit call to non-base class' \
+    'class A : VTableBase { void f() { puts("ok"); } }
+     class B { void f() { (A.f()); } }
+     B b; b.f()' \
+     "${parseError}2: 'this' is not an instance of A"
+
+test_output 'unsafe casts' \
+    'class A {} class B : A { void run() { puts("ok"); } } A a = B(); 
+     (B.unsafeCast(a).run());' \
+    ok
+
+test_output 'unsafe casts from non-primary base classes' \
+    'class A {} class B {}
+     class C : A, B { void run() { puts("ok"); } }
+     B b = C(); (C.unsafeCast(b).run());' \
+     ok
+
+test_output 'dyanmic subclass check' \
+    'class A {} class B : A {} class C {}
+     if (C.isSubclass(A)) puts("FAIL");
+     if (B.isSubclass(A)) puts("ok");' \
+     ok
+
+test_output 'the class operator' \
+    'class A : VTableBase {} class B : A {} class C : VTableBase {}
+     if (C().class.isSubclass(A)) puts("FAIL");
+     if (B().class.isSubclass(A)) puts("ok");' \
+     ok
+
+test_output 'safe casting' \
+    'class A : VTableBase {}
+     class B : A { void check() { puts("ok"); } }
+     A b = B();
+     (B).cast(b).check();' \
+    'ok'
+
 test_output 'logical and' 'import test.test_logicaland;' ok
 
 # switch to full bootstrapping mode now that importing works
