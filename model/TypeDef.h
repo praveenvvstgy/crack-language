@@ -35,21 +35,22 @@ class TypeDef : public VarDef {
         // a vector of types that can be used as a key
         struct TypeVecKey {
             TypeVecPtr vec;
-//            TypeVecKey() : vec(0) {}
             TypeVecKey(TypeVec *vec) : vec(vec) {}
             bool operator <(const TypeVecKey &other) const {
                 if (vec == other.vec)
                     return false;
-                else if (!vec && other.vec)
-                    return true;
-                else if (vec && !other.vec)
-                    return true;
                 else
                     return *vec < *other.vec;
             }
+            
+            bool equals(const TypeVec *other) const {
+                return *vec == *other;
+            }
         };
         typedef std::map<TypeVecKey, TypeDefPtr> SpecializationCache;
-        // true if this is a generic type.
+        
+        // defined for a generic type.  Stores the cache of all 
+        // specializations for the type.
         SpecializationCache *generic;
         
         // the type's context - contains all of the method/attribute 
@@ -67,16 +68,22 @@ class TypeDef : public VarDef {
         // if true, the type has a vtable (and is derived from vtable_base)
         bool hasVTable;
         
+        // if the type is a meta type, "meta" is the type that it is the 
+        // meta-type of.
+        TypeDef *meta;
+        
         // if true, the initializers for the type have been emitted and it is 
         // now illegal to add instance variables.
         bool initializersEmitted;
         
-        // XXX need a metatype
-        TypeDef(const std::string &name, bool pointer = false) :
-            VarDef(0, name),
+        TypeDef(TypeDef *metaType, const std::string &name, 
+                bool pointer = false
+                ) :
+            VarDef(metaType, name),
             generic(0),
             pointer(pointer),
             hasVTable(false),
+            meta(0),
             initializersEmitted(false) {
         }
         
@@ -130,6 +137,15 @@ class TypeDef : public VarDef {
          * function exists.
          */
         virtual FuncDefPtr getConverter(const TypeDef &other);
+
+        /**
+         * Create a function to cast to the type (should only be used on a 
+         * type with a vtable)
+         * @param outerContext this should be the context that the type was 
+         *        defined in (it's used to find the module scoped __die() 
+         *        function).
+         */
+        void createCast(Context &outerContext);
 
         /**
          * Fill in everything that's missing from the class.

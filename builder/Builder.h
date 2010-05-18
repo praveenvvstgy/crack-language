@@ -123,7 +123,8 @@ class Builder : public spug::RCBase {
          * @param pos the branchpoint object returned from the emitWhile().
          */        
         virtual void emitEndWhile(model::Context &context,
-                                  model::Branchpoint *pos
+                                  model::Branchpoint *pos,
+                                  bool isTerminal
                                   ) = 0;
 
         /**

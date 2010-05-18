@@ -25,8 +25,6 @@ SPUG_RCPTR(LLVMBuilder);
 
 class LLVMBuilder : public Builder {
     private:
-
-        llvm::Function *func;
         
         llvm::ExecutionEngine *execEng;
         
@@ -61,6 +59,7 @@ class LLVMBuilder : public Builder {
         // LLVMBuilder.cc's anonymous internal namespace access to them.  It 
         // seems to be cutting down on the amount of code necessary to do this.
         llvm::Module *module;
+        llvm::Function *func;
         llvm::Type *llvmVoidPtrType;
         llvm::IRBuilder<> builder;
         llvm::Value *lastValue;
@@ -83,7 +82,7 @@ class LLVMBuilder : public Builder {
         model::TypeDef *getFuncType(model::Context &context,
                                     const llvm::Type *llvmFuncType
                                     );
-        
+
         LLVMBuilder();
 
         virtual BuilderPtr createChildBuilder();
@@ -134,7 +133,9 @@ class LLVMBuilder : public Builder {
                            model::Expr *cond);
 
         virtual void emitEndWhile(model::Context &context,
-                                  model::Branchpoint *pos);
+                                  model::Branchpoint *pos,
+                                  bool isTerminal
+                                  );
 
         virtual void emitBreak(model::Context &context, 
                                model::Branchpoint *branch
