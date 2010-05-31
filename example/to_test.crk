@@ -85,3 +85,27 @@ class A {
     int y;
     oper init() : y = 0, x = y {}
 };
+
+# not sure why, but this causes a "Calling a function with a bad signature" 
+# assertion failure in LLVM:
+import crack.lang FreeBase;
+class Foo : FreeBase { oper bind() { print('binding'); } oper release() { print('releasing'); } };
+f := array[Foo](10);
+Foo foo;
+f[0] = Foo();
+
+# the implicit "del" operator does not override correctly
+class Marker { oper release() { puts('releasing Marker'); } }
+class A : VTableBase {}
+class B : A {
+    Marker m;
+}
+A a = B();
+a.__del();
+
+# this should fail but does not.
+class A : VTableBase {}
+class B : A {}
+A a;
+(B.cast(a)); # should die here.
+puts('fail');
