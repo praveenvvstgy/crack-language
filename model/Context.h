@@ -46,6 +46,11 @@ class Context : public spug::RCBase {
         // break and continue branchpoints
         BranchpointPtr breakBranch, continueBranch;
 
+        /**
+         * Stores a definition, promoting it to an overload if necessary.
+         */
+        void storeDef(VarDef *def);
+
     public:
 
         // context scope - this is used to control how variables defined in 
@@ -77,6 +82,9 @@ class Context : public spug::RCBase {
         // are cleaning up.
         bool emittingCleanups;
         
+        // if true, a terminal statement has been emitted in the context.
+        bool terminal;
+        
         // this is the return type for a function context, and the class type 
         // for a class context.  XXX there is a reference cycle between the 
         // class and its context.
@@ -87,7 +95,8 @@ class Context : public spug::RCBase {
 
         struct GlobalData {
             StrConstTable strConstTable;
-            TypeDefPtr voidType,
+            TypeDefPtr classType,
+                       voidType,
                        voidPtrType,
                        boolType,
                        byteptrType,
@@ -145,6 +154,24 @@ class Context : public spug::RCBase {
          * Definition contexts are non-composite contexts.
          */
         ContextPtr getDefContext();
+        
+        /**
+         * Returns the depth-first closest enclosing toplevel context.
+         */
+        ContextPtr getToplevel();
+        
+        /**
+         * Returns the parent of the context.  This function can only be used 
+         * on contexts with a exactly one parent.
+         */
+        ContextPtr getParent();
+        
+        /**
+         * Returns true if the context encloses the "other" context - a 
+         * context encloses another context if it is an ancestor of the other 
+         * context.
+         */
+        bool encloses(const Context &other) const;
 
         /**
          * Returns the Overload Definition for the given name for the current 
@@ -173,8 +200,11 @@ class Context : public spug::RCBase {
         /**
          * Look up a function with no arguments.  This is provided as a 
          * convenience, as in this case we don't need to pass the call context.
+         * @param acceptAlias if false, ignore an alias.
          */
-        FuncDefPtr lookUpNoArgs(const std::string &varName);
+        FuncDefPtr lookUpNoArgs(const std::string &varName, 
+                                bool acceptAlias = true
+                                );
         
         ModuleDefPtr createModule(const std::string &name);
         void addDef(VarDef *def);
@@ -210,8 +240,10 @@ class Context : public spug::RCBase {
          * Get or create a string constant.  This can be either a
          * "StaticString(StrConst, uint size)" expression if StaticString is 
          * defined, or a simple StrConst if it is not.
+         * @param raw if true, create a byteptr even if StaticString is 
+         *  defined.
          */
-        ExprPtr getStrConst(const std::string &value);
+        ExprPtr getStrConst(const std::string &value, bool raw = false);
 
         /**
          * Create a new cleanup frame.  Cleanup frames group all 

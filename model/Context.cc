@@ -23,6 +23,16 @@
 using namespace model;
 using namespace std;
 
+void Context::storeDef(VarDef *def) {
+    FuncDef *funcDef;
+    if (funcDef = FuncDefPtr::cast(def)) {
+        OverloadDefPtr overloads = getOverload(def->name);
+        overloads->addFunc(funcDef);
+    } else {        
+        defs[def->name] = def;
+    }
+}
+
 Context::GlobalData::GlobalData() : 
     objectType(0), stringType(0), staticStringType(0) {
 }
@@ -35,6 +45,7 @@ Context::Context(builder::Builder &builder, Context::Scope scope,
     complete(false),
     toplevel(false),
     emittingCleanups(false),
+    terminal(false),
     returnType(parentContext ? parentContext->returnType : TypeDefPtr(0)),
     globalData(parentContext ? parentContext->globalData : new GlobalData()),
     cleanupFrame(builder.createCleanupFrame(*this)) {
@@ -51,6 +62,7 @@ Context::Context(builder::Builder &builder, Context::Scope scope,
     complete(false),
     toplevel(false),
     emittingCleanups(false),
+    terminal(false),
     returnType(TypeDefPtr(0)),
     globalData(globalData),
     cleanupFrame(builder.createCleanupFrame(*this)) {
@@ -88,6 +100,38 @@ ContextPtr Context::getDefContext() {
         if (result = (*iter)->getDefContext()) break;
     
     return result;
+}
+
+ContextPtr Context::getToplevel() {
+    if (toplevel)
+        return this;
+    
+    ContextPtr result;
+    for (ContextVec::iterator iter = parents.begin();
+         iter != parents.end();
+         ++iter
+         )
+        if (result = (*iter)->getToplevel()) break;
+    
+    return result;
+}
+
+ContextPtr Context::getParent() {
+    assert(parents.size() == 1);
+    return parents[0];
+}
+
+bool Context::encloses(const Context &other) const {
+    if (this == &other)
+        return true;
+    
+    for (ContextVec::const_iterator iter = other.parents.begin();
+         iter != other.parents.end();
+         ++iter
+         )
+        if (encloses(**iter))
+            return true;
+    return false;
 }
 
 ModuleDefPtr Context::createModule(const string &name) {
@@ -181,29 +225,22 @@ FuncDefPtr Context::lookUp(Context &context,
     return overload->getMatch(context, args);
 }
 
-FuncDefPtr Context::lookUpNoArgs(const std::string &name) {
+FuncDefPtr Context::lookUpNoArgs(const std::string &name, bool acceptAlias) {
     OverloadDefPtr overload = getOverload(name);
     if (!overload)
         return 0;
 
     // we can just check for a signature match here - cheaper and easier.
     FuncDef::ArgVec args;
-    return overload->getSigMatch(args);
+    FuncDefPtr result = overload->getNoArgMatch(acceptAlias);
+    return result;
 }
 
 void Context::addDef(VarDef *def) {
     assert(!def->context);
     assert(scope != composite && "defining a variable in a composite scope.");
 
-    // if this is a function, create an overload definition
-    FuncDef *funcDef;
-    if (funcDef = FuncDefPtr::cast(def)) {
-        OverloadDefPtr overloads = getOverload(def->name);
-        overloads->addFunc(funcDef);
-    } else {
-        // not an overload.  Just add it.
-        defs[def->name] = def;
-    }
+    storeDef(def);
     def->context = this;
 }
 
@@ -217,7 +254,14 @@ void Context::removeDef(VarDef *def) {
 void Context::addAlias(VarDef *def) {
     // make sure that the symbol is already bound to a context.
     assert(def->context);
-    defs[def->name] = def;
+
+    // overloads should never be aliased - otherwise the new context could 
+    // extend them.
+    OverloadDef *overload = OverloadDefPtr::cast(def);
+    if (overload)
+        storeDef(overload->createChild().get());
+    else
+        storeDef(def);
 }
 
 void Context::addAlias(const string &name, VarDef *def) {
@@ -233,7 +277,7 @@ void Context::replaceDef(VarDef *def) {
     defs[def->name] = def;
 }
 
-ExprPtr Context::getStrConst(const std::string &value) {
+ExprPtr Context::getStrConst(const std::string &value, bool raw) {
     
     // look up the raw string constant
     StrConstPtr strConst;
@@ -246,8 +290,9 @@ ExprPtr Context::getStrConst(const std::string &value) {
         globalData->strConstTable[value] = strConst;
     }
     
-    // if we don't have a StaticString type yet, we're done.
-    if (!globalData->staticStringType)
+    // if we don't have a StaticString type yet (or the caller wants a raw
+    // bytestr), we're done.
+    if (raw || !globalData->staticStringType)
         return strConst;
     
     // create the "new" expression for the string.
@@ -321,7 +366,6 @@ Branchpoint *Context::getBreak() {
         assert(parents.size() == 1 && "local scope has more than one parent");
         return parents[0]->getBreak();
     } else {
-        std::cerr << "scope = " << scope << endl;
         return 0;
     }
 }

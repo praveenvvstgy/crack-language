@@ -167,6 +167,13 @@ class Formatter : Writer {
         write(Buffer(buffer.buffer + start, buffer.size - start));
     }
     
+    void format(bool val) {
+        if (val)
+            write('true');
+        else
+            write('false');
+    }
+    
     void format(Object obj) {
         obj.writeTo(this);
     }
@@ -204,7 +211,7 @@ class StringWriter : Writer {
     ## Return a string containing everything that has been written so far.
     String createString() {
         # store the info in a temporary buffer, if we create a string directly 
-        # from buf the new String will steal the buffer from 
+        # from buf the new String will steal the buffer from us.
         b := Buffer(buf.buffer, pos);
         return String(b);
     }
