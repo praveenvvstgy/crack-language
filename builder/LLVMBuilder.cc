@@ -1663,6 +1663,7 @@ namespace {
 
     UNOP(SExt);
     UNOP(ZExt);
+    UNOP(FPExt);
 
     // truncate is a unary op but is used as the "oper new" so it doesn't get 
     // a receiver.
@@ -1830,35 +1831,52 @@ namespace {
 
     class NegOpCall : public FuncCall {
         public:
-            NegOpCall(FuncDef *def) : FuncCall(def) {}
+            typedef enum { intType, floatType } negType;
+            NegOpCall(FuncDef *def, negType t) : FuncCall(def), _t(t) {}
             
             virtual ResultExprPtr emit(Context &context) {
                 args[0]->emit(context)->handleTransient(context);
                 
                 LLVMBuilder &builder =
                     dynamic_cast<LLVMBuilder &>(context.builder);
-                builder.lastValue =
-                    builder.builder.CreateSub(
-                        ConstantInt::get(
-                            BTypeDefPtr::arcast(func->returnType)->rep,
-                            0
-                            ),
-                        builder.lastValue
-                    );
                 
+                if (_t == intType) {
+                    builder.lastValue =
+                        builder.builder.CreateSub(
+                            ConstantInt::get(
+                                BTypeDefPtr::arcast(func->returnType)->rep,
+                                0
+                                ),
+                            builder.lastValue
+                        );
+                }
+                else {
+                    builder.lastValue =
+                        builder.builder.CreateFSub(
+                                ConstantFP::get(BTypeDefPtr::arcast(func->returnType)->rep,
+                                0
+                                ),
+                            builder.lastValue
+                        );
+                }
+
                 return new BResultExpr(this, builder.lastValue);
             }
+        private:
+            negType _t;
     };
 
     class NegOpDef : public OpDef {
+            NegOpCall::negType _t;
         public:
-            NegOpDef(BTypeDef *resultType, const std::string &name) :
-                OpDef(resultType, FuncDef::noFlags, name, 1) {
+            NegOpDef(BTypeDef *resultType, const std::string &name,
+                    NegOpCall::negType t = NegOpCall::intType) :
+                OpDef(resultType, FuncDef::noFlags, name, 1), _t(t) {
                 args[0] = new ArgDef(resultType, "operand");
             }
             
             virtual FuncCallPtr createFuncCall() {
-                return new NegOpCall(this);
+                return new NegOpCall(this, _t);
             }
     };
     
@@ -2145,6 +2163,19 @@ namespace {
     BINOP(ICmpULT, "<");
     BINOP(ICmpUGE, ">=");
     BINOP(ICmpULE, "<=");
+
+    BINOP(FAdd, "+");
+    BINOP(FSub, "-");
+    BINOP(FMul, "*");
+    BINOP(FDiv, "/");
+    BINOP(FRem, "%");
+
+    BINOP(FCmpOEQ, "==");
+    BINOP(FCmpONE, "!=");
+    BINOP(FCmpOGT, ">");
+    BINOP(FCmpOLT, "<");
+    BINOP(FCmpOGE, ">=");
+    BINOP(FCmpOLE, "<=");
 
     QUAL_BINOP(Is, ICmpEQ, "is");
 
@@ -3289,6 +3320,7 @@ ModuleDefPtr LLVMBuilder::createModule(Context &context, const string &name) {
     BTypeDef *int32Type = BTypeDefPtr::arcast(context.globalData->int32Type);
     BTypeDef *intType = BTypeDefPtr::arcast(context.globalData->intType);
     BTypeDef *voidType = BTypeDefPtr::arcast(context.globalData->int32Type);
+    BTypeDef *float32Type = BTypeDefPtr::arcast(context.globalData->float32Type);
     BTypeDef *byteptrType = 
         BTypeDefPtr::arcast(context.globalData->byteptrType);
     BTypeDef *voidptrType = 
@@ -3320,7 +3352,14 @@ ModuleDefPtr LLVMBuilder::createModule(Context &context, const string &name) {
         f.addArg("val", int32Type);
         f.finish();
     }
-    
+
+    // create "void printfloat(float32)"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidType, "printfloat", 1);
+        f.addArg("val", float32Type);
+        f.finish();
+    }
+
     // create "void *calloc(uint size)"
     {
         FuncBuilder f(context, FuncDef::noFlags, voidptrType, "calloc", 2);
@@ -3537,6 +3576,10 @@ ResultExprPtr LLVMBuilder::emitFieldAssign(Context &context,
     }
 
     return new BResultExpr(assign, lastValue);
+}
+
+extern "C" void printfloat(float val) {
+    std::cout << val << flush;
 }
 
 extern "C" void printint(int val) {
@@ -3888,6 +3931,20 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
     context.addDef(new NegOpDef(int64Type, "oper -"));
     context.addDef(new BitNotOpDef(int64Type, "oper ~"));
 
+    // float operations
+    context.addDef(new FAddOpDef(float32Type));
+    context.addDef(new FSubOpDef(float32Type));
+    context.addDef(new FMulOpDef(float32Type));
+    context.addDef(new FDivOpDef(float32Type));
+    context.addDef(new FRemOpDef(float32Type));
+    context.addDef(new FCmpOEQOpDef(float32Type, boolType));
+    context.addDef(new FCmpONEOpDef(float32Type, boolType));
+    context.addDef(new FCmpOGTOpDef(float32Type, boolType));
+    context.addDef(new FCmpOLTOpDef(float32Type, boolType));
+    context.addDef(new FCmpOGEOpDef(float32Type, boolType));
+    context.addDef(new FCmpOLEOpDef(float32Type, boolType));
+    context.addDef(new NegOpDef(float32Type, "oper -", NegOpCall::floatType));
+
     // boolean logic
     context.addDef(new LogicAndOpDef(boolType, boolType));
     context.addDef(new LogicOrOpDef(boolType, boolType));
@@ -3901,6 +3958,7 @@ void LLVMBuilder::registerPrimFuncs(model::Context &context) {
     int32Type->context->addDef(new ZExtOpDef(uint64Type, "oper to uint64"));
     uint32Type->context->addDef(new ZExtOpDef(uint64Type, "oper to uint64"));
     uint32Type->context->addDef(new ZExtOpDef(int64Type, "oper to int64"));
+    float32Type->context->addDef(new FPExtOpDef(float64Type, "oper to float64"));
 
     addExplicitTruncate(int64Type, uint64Type);
     addExplicitTruncate(int64Type, int32Type);
