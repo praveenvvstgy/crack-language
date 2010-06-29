@@ -1,0 +1,275 @@
+#!/usr/bin/crack
+# Copyright 2010 Google Inc.
+
+import "libc.so.6" abort, free, strcpy, strlen, strdup, malloc, memcpy, memcmp, 
+                   memmove, realloc;
+
+byteptr malloc(uint size);
+byteptr realloc(byteptr buf, uint size);
+byteptr memcpy(byteptr dest, byteptr src, uint size);
+byteptr memmove(byteptr dest, byteptr src, uint size);
+int memcmp(byteptr a, byteptr b, uint size);
+void free(voidptr mem);
+byteptr strcpy(byteptr dest, byteptr src);
+uint strlen(byteptr buf);
+byteptr strdup(byteptr buf);
+void abort();
+
+bool true = (1 == 1);
+bool false = (1 == 0);
+
+void _die(byteptr message) {
+    puts("Object with non-zero ref count deleted!");
+    abort();
+}
+
+class XWriter : VTableBase {
+    void write(byteptr buf, uint size) {
+        puts("XWriter.write() called.");
+        abort();
+    }
+};
+
+## Base class for things that you don't want derived from object or VTableBase.
+class FreeBase {};
+
+## The Object base class.  Object provides the basic reference counting 
+## mechanism, and most user classes should be derived from it.
+class Object : VTableBase {
+    uint refCount;
+
+    oper init() : refCount = 0 {
+    }
+
+    # delete virtual function
+    oper del() { 
+        if (refCount) {
+            _die("Object with non-zero ref count deleted!");
+        }
+    }
+
+    oper bind() {
+        if (!(this is null))
+            refCount = refCount + 1;
+    }
+    
+    oper release() {
+        if (this is null)
+            return;
+
+        refCount = refCount - 1;
+        if (refCount == 0) {
+            this.oper del();
+            free(this);
+        }
+    }
+    
+    bool isTrue() {
+        return true;
+    }
+    
+    ## Comparison function - returns a value < 0 if this < other, 0 if this is 
+    ## equal to other, > 0 if this > other.
+    int cmp(Object other) {
+        if (this is other) return 0; else return 1;
+    }
+    
+    bool oper <(Object other) {
+        return cmp(other) < 0;
+    }
+    
+    bool oper <=(Object other) {
+        return cmp(other) <= 0;
+    }
+    
+    bool oper ==(Object other) {
+        return cmp(other) == 0;
+    }
+    
+    bool oper !=(Object other) {
+        return cmp(other) != 0;
+    }
+
+    bool oper >=(Object other) {
+        return cmp(other) >= 0;
+    }
+
+    bool oper >(Object other) {
+        return cmp(other) > 0;
+    }
+
+    bool toBool() {
+        if (this is null)
+            return false;
+        else
+            return isTrue();
+    }
+    
+    void writeTo(XWriter writer) {
+        writer.write("<Object>", 8);
+    }
+};
+
+## The buffer base class containing a bytebuf and size.
+class Buffer : Object {
+
+    // buffer and size.
+    uint size;    
+    byteptr buffer;
+
+    oper init(byteptr buffer0, uint size0) : buffer = buffer0, size = size0 {}
+    
+    bool isTrue() {
+        return size;
+    }
+    
+    void writeTo(XWriter writer) {
+        writer.write(buffer, size);
+    }
+
+    byte oper [](uint index) {
+        if (index >= size)
+            _die('string index out of bounds');
+        return buffer[index];
+    }
+};
+
+## A writable buffer.  You can assume that it is safe to write to one of these.
+class WriteBuffer : Buffer {
+    
+    ## constructor inheritence would be nice
+    oper init(byteptr buffer, uint size) : Buffer(buffer, size) {}
+
+    ## Move data from an arbitrary byteptr into the buffer.
+    void move(uint start, byteptr ptr, uint count) {
+        if (start + count > size)
+            _die('Move target out of bounds');
+        memmove(buffer + start, ptr, count);
+    }
+
+    ## move data from one place in the buffer to another place in the buffer.
+    void move(uint newStart, uint oldStart, uint count) {
+        if (oldStart + count > size)
+            _die('Move source out of bounds');
+        move(newStart, buffer + oldStart, count);
+    }
+    
+    ## move a buffer to a place in this buffer.
+    void move(uint newStart, Buffer buf) {
+        move(newStart, buf.buffer, buf.size);
+    }
+};
+
+## A managed buffer.  Deletes the bytebuf when it goes out of scope.
+class ManagedBuffer : WriteBuffer {
+
+    oper init(uint size) : WriteBuffer(malloc(size), size) {}
+
+    ## Orphan's the byte buffer, returning it for use by the caller.  The 
+    ## caller is responsible for freeing it.
+    byteptr orphan() {
+        temp := buffer;
+        buffer = null;
+        return temp;
+    }
+    
+    ## Grow the buffer to the new size.
+    void grow(uint newSize) {
+        if (newSize <= size) {
+            puts('attempt to grow to a smaller or same size.');
+            abort();
+        }
+        
+        newBuffer := malloc(newSize);
+        if (!(buffer is null)) {
+            memcpy(newBuffer, buffer, size);
+            free(buffer);
+        }
+        buffer = newBuffer;
+        size = newSize;
+    }
+    
+    oper del() {
+        if (!(buffer is null))
+            free(buffer);
+    }
+};
+
+## The string class.  Strings are immutable managed Buffer's - when they are 
+## deleted, their buffer goes away.
+class String : Buffer {
+
+    ## Initialize from a buffer.  This copies the buffer, it does not assume 
+    ## ownership.
+    oper init(Buffer buf) : Buffer(malloc(buf.size), buf.size) {
+        memcpy(buffer, buf.buffer, buf.size);
+    }
+
+    ## Initialize from a WriteBuffer and take ownership (the value of 
+    ## takeOwnership is actually ignored).
+    oper init(ManagedBuffer buf, bool takeOwnership) : 
+        Buffer(buf.orphan(), size) {
+    }
+    
+    ## Initialize from byte pointer and size and take ownership.
+    oper init(byteptr buf, uint size, bool takeOwnership) :
+        Buffer(buf, size) {
+    }
+    
+    ## Initialize from a null-terminated c-string
+    oper init(byteptr cString) : Buffer(null, strlen(cString)) {
+        buffer = malloc(size + 1);
+        strcpy(buffer, cString);
+    }
+
+    ## Create an empty string.
+    oper init() : Buffer(malloc(0), 0) {}
+    
+    void _freeBuffer() {
+        free(buffer);
+    }
+    
+    oper del() {
+        _freeBuffer();
+    }
+
+    ## Override Object.cmp() to do string comparison.
+    int cmp(Object other) {
+        
+        # deal with the simple case
+        if (this is other)
+            return 0;
+
+        # if the other object is a string, do string comparison.
+        if (other.class.isSubclass(String)) {
+            os := String.unsafeCast(other);
+            if (size > os.size)
+                return memcmp(buffer, os.buffer, os.size);
+            else
+                return memcmp(buffer, os.buffer, size);
+        } else {
+            # if other is not a string, it is not equal.
+            return 1;
+        }
+    }
+};
+
+class StaticString : String {
+
+    oper init(byteptr data, uint size) : String(data, size, true) {}
+    
+    ## Initialize from a null terminated string.
+    oper init(byteptr data) : String(data, strlen(data), true) {}
+    
+    # override _freeBuffer so we don't...
+    void _freeBuffer() {}
+};
+
+void print(String val) {
+    puts(val.buffer);
+}
+
+void die(String message) {
+    print(message);
+    abort();
+}
