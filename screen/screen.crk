@@ -1,0 +1,62 @@
+// A test suite for crack
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.lang die, exit, strcat;
+import crack.io cout, StringFormatter;
+import crack.sys argv;
+import crack.exp.dir Directory, PATH_SEPARATOR;
+
+class TestSuite {
+
+    String _rootDir;
+    
+    void usage() {
+        cout `screen <dir>\n`;
+        exit(1);
+    }
+    
+    void scanForTests(String dir) {
+    
+        //cout `importing tests from $dir ...\n`;
+        d := Directory(dir, true);
+        //if (!d.isValid())
+        //    die("invalid directory");
+
+        // recurse to directories
+        String nextDir;
+        StringFormatter f;
+        while (nextDir = d.nextDir()) {
+            if (nextDir != '.' && nextDir != '..') {
+                f `$dir$PATH_SEPARATOR$nextDir`;
+                scanForTests(f.createString());
+            }
+        }
+
+        // gather test files
+        //String nextFile;
+        //while (nextFile = d.nextFile()) {
+
+        //}
+        
+    }
+
+    oper init() {
+        
+        if (argv.count() <= 1) {
+            usage();            
+        }
+                
+        _rootDir = argv[1];
+        scanForTests(_rootDir);
+        
+    }
+
+}
+
+class Test {
+    
+    String _name, _desc;
+
+}
+
+suite := TestSuite();

@@ -1,0 +1,95 @@
+# Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+# Classes for directory traversal
+
+import crack.io cerr, StringFormatter;
+import crack.lang die, FreeBase;
+import crack.exp.bindings Opaque;
+
+import "libcrack-runtime.so" _crack_opendir, _crack_closedir, _crack_readdir;
+
+class _DIR: Opaque { }
+
+class _DirEntry: FreeBase {
+    byteptr _name;
+    int _type;
+}
+
+// must match Dir.h defines
+int __CRACK_DTYPE_DIR   = 1;
+int __CRACK_DTYPE_FILE  = 2;
+int __CRACK_DTYPE_OTHER = 3;
+
+_DIR _crack_opendir(byteptr dirname);
+int _crack_closedir(_DIR d);
+int _crack_readdir(_DIR d, _DirEntry i);
+
+// XXX make portable
+StaticString PATH_SEPARATOR = "/";
+
+class FileInfo {
+
+
+}
+
+class Directory {
+
+    _DIR _dir = null;
+    bool _isValid = false; // implies isOpened
+    bool _isOpened = false;
+    String _name;
+
+    void _openDir() {
+        _dir = _crack_opendir(_name.buffer);
+        _isValid = !(_dir is null);
+        _isOpened = true;
+    }
+
+    oper init(String name, bool open/*=true*/): _name(name) {
+        if (open)
+            _openDir();
+    }
+    
+    oper del() {
+        if (_isValid)
+            _crack_closedir(_dir);
+    }
+
+
+    bool isValid() { return _isValid; }
+
+    bool isOpened() { return _isOpened; }
+
+    String name() { return _name; }
+
+    // XXX this should return Directory when issue #5 is fixed    
+    StaticString nextDir() {
+
+        if (!_isOpened)
+            _openDir();
+
+        if (!_isValid)
+            return null;
+
+        _DirEntry d;
+        r := _crack_readdir(_dir, d);
+        if (!r)
+            return null;
+        else  {
+            if (d._type == __CRACK_DTYPE_DIR) {
+                return StaticString(d._name);
+            }
+            else
+                return nextDir();
+        }
+            
+    };
+
+    /*    
+    FileInfo nextFile() {
+        if (!_isValid)
+            return null;
+    }
+    */
+    
+}
+
