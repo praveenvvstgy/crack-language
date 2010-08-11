@@ -1,0 +1,113 @@
+// A test suite for crack
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.lang die, exit;
+import crack.io cout, cerr, XWFormatter, XWriter;
+import crack.sys argv;
+import crack.container List, Iterator;
+import crack.exp.dir Directory, FileInfo;
+import crack.exp.stream File;
+
+class Test {
+
+    FileInfo _fInfo = null;
+    String _name, _desc;
+
+    oper init(): _name("Unknown"), _desc("Unknown") { }
+
+    void loadTemplate() {
+        f := File(_fInfo.name, "r");
+        if (f.isValid()) {
+            cout `opened file: $(_fInfo.name)\n`;
+        }
+        else {
+            cout `file: $(_fInfo.name) could not be opened!\n`;
+        }
+    }
+
+    oper init(FileInfo info): _fInfo = info,
+                              _name("Unknown"),
+                              _desc("Unknown") {
+        loadTemplate();
+    }
+
+    void writeTo(XWriter out) {
+        XWFormatter(out) `[$_fInfo]: $_name - $_desc`;
+    }
+
+}
+
+class TestSuite {
+
+    String _rootDir;
+    List _testList;
+
+    void usage() {
+        cout `screen <dir>\n`;
+        exit(1);
+    }
+    
+    void scanForTests(Directory dir) {
+    
+        if (!dir.isValid()) {
+            cerr `skipping invalid directory: $dir\n`;
+            return;
+        }
+        
+        cout `importing tests from $dir ...\n`;
+
+        Iterator i;
+        
+        // gather test files
+        FileInfo curFile = null;
+        i = dir.fileInfoIter();
+        while (i.nx()) {
+            curFile = FileInfo.cast(i.elem());
+            if (curFile.matches("*.crkt")) {
+                cout `found test template file: $curFile\n`;
+                test := Test(curFile);
+                _testList.append(test);
+            }
+        }
+
+        // recurse to directories
+        Directory nextDir = null;
+        i = dir.dirIter();
+        while (i.nx()) {
+            nextDir = Directory.cast(i.elem());
+            scanForTests(nextDir);
+        }
+
+
+    }
+
+    void runTests() {
+
+        cout `\nrunning tests...\n`;
+
+        Test curTest = null;
+
+        i := _testList.iter();
+        while (i.nx()) {
+            curTest = Test.cast(i.elem());
+            cout `$curTest\n`;
+        }
+
+    }
+
+    oper init() {
+        
+        if (argv.count() <= 1) {
+            usage();            
+        }
+                
+        _rootDir = argv[1];
+        scanForTests(Directory(_rootDir));
+
+        runTests();
+        
+    }
+
+}
+
+suite := TestSuite();
