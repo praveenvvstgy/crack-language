@@ -1,0 +1,102 @@
+// Classes for io streams
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.io cerr, XWFormatter, XWriter, FDReader;
+import crack.lang die, FreeBase;
+import crack.exp.bindings Opaque;
+import crack.exp.readers LineReader;
+
+import "libc.so.6" fopen, fclose, fileno, strerror;
+import "libcrack-runtime.so"  _crack_fnmatch, _crack_strerror;
+
+class _FILE: Opaque { }
+
+_FILE fopen(byteptr fn, byteptr mode);
+int fclose(_FILE f);
+int fileno(_FILE f);
+int _crack_fnmatch(byteptr pattern, byteptr string);
+byteptr _crack_strerror();
+
+class FileInfo: Object {
+
+    String name;
+
+    oper init(String name0): name(name0) { }
+    oper init(byteptr name0): name(name0) { }
+
+    bool matches(String pattern) {
+        return (_crack_fnmatch(pattern.buffer, name.buffer) == 0);
+    }
+
+    void writeTo(XWriter out) {
+        XWFormatter(out) `$name`;
+    }
+
+}
+
+// no memory management
+class Openable: VTableBase {
+
+    bool _isValid = false; // implies isOpened
+    bool _isOpened = false;
+
+    void _open() { }
+
+    bool isValid() {
+        if (!_isOpened)
+            _open();
+        return _isValid;
+    }
+
+    bool isOpened() { return _isOpened; }
+
+}
+
+class File : FileInfo,
+             Openable {
+
+    String _mode;
+    _FILE _fd = null;
+    LineReader _lReader = null;
+
+    oper init(String name0, String mode0): FileInfo(name0),
+                                           _mode(mode0) {
+        _fd = fopen(name0.buffer, _mode.buffer);
+        if (_fd is null) {
+            err := String(_crack_strerror());
+            cerr `$name0: $err\n`;
+            _isValid = false;
+            _isOpened = false;
+        }
+        else {
+            
+            // XXX parse mode, setup based on read/write modes
+            _lReader = LineReader(FDReader(fileno(_fd)));
+            _isValid = true;
+            _isOpened = true;
+            
+        }
+    }
+
+    String nextLine() {
+
+        if (!_isValid || !_isOpened)
+            return null;
+
+        return _lReader.next();
+
+    }
+
+    void close() {
+        if (_isOpened)
+            fclose(_fd);
+    }
+
+    oper del() {
+        if (_isOpened)
+            close();
+    }
+
+}
+
+
