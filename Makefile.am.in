@@ -3,7 +3,7 @@
 
 lib_LTLIBRARIES = libcrack.la libcrack-runtime.la
 libcrack_la_SOURCES = %libCrackSources%
-libcrack_la_LDFLAGS = -version-info 1:0:0
+libcrack_la_LDFLAGS = -version-info 1:0:0 @LLVM_LDFLAGS@ @LLVM_LIBS@
 libcrack_runtime_la_SOURCES = %libRuntimeSources%
 libcrack_runtime_la_LDFLAGS = -version-info 0:0:0
 
@@ -71,12 +71,13 @@ noinst_HEADERS = \
     spug/TypeInfo.h \
     Crack.h
 
-EXTRA_DIST = doc lib test Credits CMakeLists.txt sourceModules.txt cmake
+EXTRA_DIST = doc lib test Credits CMakeLists.txt sourceModules.txt \
+    runtimeModules.txt cmake
 
 bin_PROGRAMS = crack
 
 crack_SOURCES = crack.cc
-crack_LDADD = libcrack.la $(LDFLAGS) @LLVM_LDFLAGS@ @LLVM_LIBS@
+crack_LDADD = libcrack.la $(LDFLAGS)
 # use LLVM flags, but override their "--no-exceptions" flag.
 AM_CXXFLAGS = @LLVM_CXXFLAGS@ -fexceptions
 
@@ -96,17 +97,14 @@ doc/Manual.html: doc/Manual.nml
 install-data-local: doc/Manual.html
 	$(MKDIR_P) $(DESTDIR)$(cracklib)
 	$(MKDIR_P) $(DESTDIR)$(cracklib)/crack
-	$(INSTALL) $(srcdir)/lib/crack/container.crk \
-	   $(DESTDIR)$(cracklib)/crack
-	$(INSTALL) $(srcdir)/lib/crack/lang.crk $(DESTDIR)$(cracklib)/crack
-	$(INSTALL) $(srcdir)/lib/crack/io.crk $(DESTDIR)$(cracklib)/crack
-	$(MKDIR_P) $(DESTDIR)$(cracklib)/crack/exp
-	$(INSTALL) $(srcdir)/lib/crack/exp/bindings.crk \
-	   $(DESTDIR)$(cracklib)/crack/exp
-	$(INSTALL) $(srcdir)/lib/crack/exp/gtk.crk \
-	   $(DESTDIR)$(cracklib)/crack/exp
-	$(INSTALL) $(srcdir)/lib/crack/exp/regex.crk \
-	   $(DESTDIR)$(cracklib)/crack/exp
+	(cd $(srcdir)/lib; \
+	 for file in $$(find); do \
+	   if test -d $$file; then \
+	       $(MKDIR_P) $(DESTDIR)$(cracklib)/$$file; \
+	   else \
+	       $(INSTALL) $$file $(DESTDIR)$(cracklib)/$$file; \
+	   fi; \
+	 done)
 	$(MKDIR_P) $(DESTDIR)$(docdir)
 	$(INSTALL) $(srcdir)/doc/Manual.html $(DESTDIR)$(docdir)
 
