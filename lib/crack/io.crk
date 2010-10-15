@@ -1,0 +1,268 @@
+# Copyright 2009, Google Inc.
+# Basic input/output classes.
+
+import crack.lang die, Buffer, WriteBuffer, ManagedBuffer, Writer;
+
+import "libc.so.6" strlen, write, malloc, memcpy, free, read;
+import "libcrack-runtime.so"  _crack_float_str;
+
+uint strlen(byteptr string);
+uint write(int fd, byteptr buf, uint len);
+uint read(int fd, byteptr buf, uint size);
+byteptr malloc(uint size);
+byteptr memcpy(byteptr dst, byteptr src, uint size);
+void free(byteptr mem);
+
+# XXX temporary
+void _crack_float_str(float64 f, byteptr buf, uint size);
+
+## Writer for a file descriptor.
+class FDWriter : Object, Writer {
+    int fd;
+
+    ## Constructs an FDWriter from a plain file descriptor.
+    oper init(int fd0) : fd = fd0 {}
+
+    void write(Buffer buf) {
+        write(fd, buf.buffer, buf.size);
+    }
+    
+    Object getWriterObject() { return this; }
+};
+
+## Interface for all readers.  Readers support two flavors of read()
+## methods that allow you to read bytes from a stream.
+## This must be mixed in with something derived from Object, you must 
+## implement read(WriteBuffer) and getReaderObject().
+class Reader : VTableBase {
+
+    ## Reads enough bytes to fill the buffer, or as many bytes as are 
+    ## available from the source.  Returns the number of bytes read.    
+    uint read(WriteBuffer buffer) {
+        die('Reader.read(uint,byteptr) called');
+        return 0;
+    }
+    
+    String read(uint size) {
+        b := ManagedBuffer(size);
+        
+        # have to qualify with this because of an overloading bug.
+        s := this.read(b);
+        
+        # if the amount read is most of the buffer, just take ownership of the 
+        # buffer.
+        if (s >= size * 3 / 4) {
+            b.size = s;
+            return String(b, true);
+        } else {
+            # otherwise copy.
+            b.size = s;
+            return String(b);
+        }
+    }
+
+    # MixIn stuff
+    Object getReaderObject() {
+        die('Reader.getReaderObject() not implemented.');
+        return null;
+    }
+    oper bind() { if (!(this is null)) getReaderObject().oper bind(); }
+    oper release() { if (!(this is null)) getReaderObject().oper release(); }
+};
+
+## Reader to read from a file descriptor.
+class FDReader : Object, Reader {
+    int fd;
+    
+    oper init(int fd0) : fd = fd0 {}
+    
+    ## Read up to 'size' bytes from the file descriptor into the buffer.
+    uint read(WriteBuffer buf) {
+        return read(fd, buf.buffer, buf.size);
+    }
+
+    Object getReaderObject() { return this; }
+};
+
+## Format val into buf.  The number will be formatted into the _end_ of the 
+## buffer.
+## Returns the start index of the number.
+uint _format(uint64 val,  ## value to format
+             byteptr buf, ## buffer to format into.  This must be large enough 
+                          ## to hold the string representation of the number.
+             uint size    ## size of the buffer
+             ) {
+    uint i = size;
+
+    # zero is special
+    if (!val) {
+        i = i - 1;
+        buf[i] = 48;
+        return i;
+    }
+    
+    uint64 v = val;
+    while (v) {
+        i = i - 1;
+        digit := byte(v % 10);
+        v = v / 10;
+        buf[i] = 48 + digit;
+    }
+    return i;
+}
+
+## Format an integer into the buffer.  "buf" must be at least 21 characters.
+## Returns the index to the beginning of the number.
+uint _format(int64 val, byteptr buf, uint size) {
+    uint i;   
+    if (val < 0) {
+        # negate the value, format the absolute value then add the sign to the 
+        # beginning
+        raw := uint64(-val);
+        i = _format(raw, buf, size) - 1;
+        buf[i] = 45; # 45 == '-'
+    } else {
+        raw := uint64(val);
+        i = _format(raw, buf, size);
+    }
+    return i;
+}
+
+## Formatter base class - got a format() method for anything.
+class Formatter : Object, Writer {
+    
+    Writer rep;
+
+    oper init(Writer rep0) : rep = rep0 {}
+
+    void write(byteptr data) {
+        // StaticString will construct with strlen
+        write(StaticString(data));
+    }
+
+    void write(Buffer data) {
+        rep.write(data);
+    }
+    
+    void format(StaticString data) {
+        write(data);
+    }
+    
+    void format(String data) {
+        write(data);
+    }
+    
+    void format(int32 val) {
+        buffer := ManagedBuffer(11);
+        
+        # have to convert so it will match the later _format method.
+        int64 v = val;
+        start := _format(v, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    void format(uint32 val) {
+        buffer := ManagedBuffer(10);
+        
+        # _format(uint32) comes first so we don't have to type convert
+        start := _format(val, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    void format(int64 val) {
+        buffer := ManagedBuffer(21);
+        start := _format(val, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    void format(uint64 val) {
+        buffer := ManagedBuffer(20);
+        start := _format(val, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    # this temporarily uses a runtime call, until we implement a float
+    # printer in crack
+    void format(float32 val) {
+        buffer := ManagedBuffer(80);
+        _crack_float_str(val, buffer.buffer, buffer.size);
+        write(buffer.buffer);
+    }
+
+    # this temporarily uses a runtime call, until we implement a float
+    # printer in crack
+    void format(float64 val) {
+        buffer := ManagedBuffer(80);
+        _crack_float_str(val, buffer.buffer, buffer.size);
+        write(buffer.buffer);
+    }
+
+    void format(bool val) {
+        if (val)
+            write('true');
+        else
+            write('false');
+    }
+    
+    ## For general objects, format() just calls the object's writeTo()
+    ## method.
+    void format(Object obj) {
+        obj.writeTo(this);
+    }
+
+    Object getWriterObject() { return this; }
+}
+
+cout := Formatter(FDWriter(1));
+cerr := Formatter(FDWriter(2));
+cin := FDReader(0);
+
+## Allows you to construct a string by writing to it.
+class StringWriter : Object, Writer {
+    
+    ManagedBuffer buf = null;
+
+    # write position within the buffer
+    uint pos;
+    
+    oper init(uint initBufSize) : buf = ManagedBuffer(initBufSize) {}
+    oper init() : buf = ManagedBuffer(1024) {}
+    
+    void write(Buffer data) {
+        # reallocate if we overflow
+        if (pos + data.size > buf.size) {
+            newSize := buf.size * 2;
+            while (pos + data.size > newSize)
+                newSize = newSize * 2;
+            buf.grow(newSize);
+        }
+
+        memcpy(buf.buffer + pos, data.buffer, data.size);
+        pos = pos + data.size;
+    }
+    
+    ## Return a string containing everything that has been written so far.
+    String createString() {
+        # store the info in a temporary buffer, if we create a string directly 
+        # from buf the new String will steal the buffer from us.
+        b := Buffer(buf.buffer, pos);
+        return String(b);
+    }
+
+    Object getWriterObject() { return this; }
+};
+
+## Convenience wrapper, equivalent to Formatter(StringWriter())
+class StringFormatter : Formatter {
+
+    StringWriter __writer;
+
+    oper init(uint initBufSize) : Formatter(null), __writer(initBufSize) {
+        rep = __writer;
+    }
+
+    oper init() : Formatter(null) { rep = __writer; }
+
+    ## see: StringWriter.createString()
+    String createString() { return __writer.createString(); }
+};
