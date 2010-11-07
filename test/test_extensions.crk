@@ -1,0 +1,37 @@
+# Copyright 2010 Google Inc.
+# Extension tests.
+
+import test.testext echo, MyType, MyAggType, INT_CONST, FLOAT_CONST;
+import crack.io cout;
+if (String(echo("hello".buffer)) != "hello")
+    cout `failed on function invocation\n`;
+
+t := MyType();
+if (String(t.echo('bite me'.buffer)) != 'bite me') 
+    cout `failed on method invocation\n`;
+
+if (t.a != 100)
+    cout `integer instance variable not set.\n`;
+
+if (String(t.b) != 'test')
+    cout `string instance variable not set.\n`;
+
+agg := MyAggType();
+if (agg.refCount != 1)
+    cout `bad reference count in MyAggType\n`;
+if (agg.a != 0)
+    cout `Instance variable "a" not initialized in MyAggType\n`;
+
+agg = MyAggType(100);
+if (agg.refCount != 1)
+    cout `bad reference count in MyAggType(100)\n`;
+if (agg.a != 100)
+    cout `Instance variable "a" not initialized in MyAggType(100)\n`;
+
+if (INT_CONST != 123)
+    cout `Constant $(INT_CONST) != 123\n`;
+
+if (FLOAT_CONST != 1.23)
+    cout `Constant $(FLOAT_CONST) != 1.23\n`;
+
+cout `ok\n`;
