@@ -1,0 +1,155 @@
+// Classes for interfaces files
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.io Formatter, Writer, FDReader, FDWriter;
+import crack.lang die, FreeBase, SubString, CString;
+import crack.exp.bindings Opaque;
+import crack.exp.readers LineReader;
+import crack.exp.error err, strerror;
+
+import crack.runtime fopen, fclose, fileno, fnmatch, basename, dirname, CFile;
+
+class FileInfo: Object {
+
+    String name;
+
+    oper init(String name0): name(name0) { }
+    oper init(byteptr name0): name(name0) { }
+
+    bool matches(String pattern) {
+        return (fnmatch(pattern.buffer, name.buffer) == 0);
+    }
+
+    void writeTo(Writer out) {
+        Formatter(out) `$name`;
+    }
+    
+    String basename(bool stripExtension) {
+        path := CString(name); // copies for null termination
+        bname := String(basename(path.buffer)); // copies again
+        if (stripExtension) {
+            pos := bname.rfind(0x2e); // '.' (dot)
+            if (pos == -1)
+                return bname;
+            else
+                return SubString(bname, 0, uint(pos));
+        }
+        else {
+            return bname;
+        }
+    }
+
+    String dirname() {
+        path := CString(name); // copies for null termination
+        return String(dirname(path.buffer)); // copies again
+    }
+
+
+}
+
+// no memory management
+class Openable: VTableBase {
+
+    bool _isValid = false; // implies isOpened
+    bool _isOpened = false;
+
+    void _open() { }
+
+    bool isValid() {
+        if (!_isOpened)
+            _open();
+        return _isValid;
+    }
+
+    bool isOpened() { return _isOpened; }
+
+}
+
+byte F_READ  = 0x72; // 'r'
+byte F_WRITE = 0x77; // 'w'
+
+class File : FileInfo,
+             Openable {
+
+    String _mode;
+    CFile _fd;
+    LineReader _lReader;
+    FDWriter _writer;
+    
+    void _open() {
+
+        n := CString(name);
+        _fd = fopen(n.buffer, _mode.buffer);
+        if (_fd is null) {
+            err.do() `$name: $(strerror())`;
+            _isOpened = false;
+            return;
+        }
+        
+        _isOpened = true;
+        
+    }
+    
+    void _initRead() {
+        
+        _open();
+        _lReader = LineReader(FDReader(fileno(_fd)));
+        _isValid = true;
+        
+    }
+
+    void _initWrite() {
+        _open();
+        _writer = FDWriter(fileno(_fd));
+        _isValid = true;
+    }
+
+    String nextLine() {
+
+        if (_lReader is null || !_isValid)
+            return null;
+
+        return _lReader.next();
+
+    }
+
+    void write(String data) {
+        
+        if (_writer is null || !_isValid)
+            return;
+        
+        _writer.write(data);
+        
+    }
+
+    void close() {
+        if (_isOpened) {
+            fclose(_fd);
+            _isOpened = false;
+        }
+    }
+
+    oper del() {
+        if (_isOpened)
+            close();
+    }
+
+   Writer getWriterObject() { return this._writer; }
+
+    oper init(String name0, String mode0): FileInfo(name0),
+                                           _mode(mode0) {
+
+        // parse file mode
+        if (_mode.size != 1 ||
+            ((_mode[0] != F_READ) && 
+             (_mode[0] != F_WRITE)))
+            err.do() `$name: invalid file mode "$_mode", must be one of "r" or "w"`;
+        
+        if (_mode[0] == F_READ)
+            _initRead();
+        else
+            _initWrite();
+        
+    }
+
+}
