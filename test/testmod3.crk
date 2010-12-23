@@ -1,0 +1,13 @@
+## test module for checking order of module cleanups.  Gets called by testmod4
+## Copyright 2010 Google Inc.
+
+class A {
+    String s;
+    oper init(String s0) : s = s0 {}
+    
+    oper del() {
+        print(s);
+    }
+};
+
+a := A('testmod3 deleted');

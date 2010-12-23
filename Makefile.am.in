@@ -1,0 +1,177 @@
+# Copyright 2003 Michael A. Muller
+# Portions Copyright 2009 Google Inc.
+
+# include macros from the m4 dir.
+ACLOCAL_AMFLAGS = -I m4 --install
+
+lib_LTLIBRARIES = libcrack.la
+libcrack_la_SOURCES = %libCrackSources%
+libcrack_la_LDFLAGS = -version-info 2:0:0 @LLVM_LDFLAGS@ @LLVM_LIBS@
+pkglib_LTLIBRARIES = test/testext.la runtime.la
+test_testext_la_LDFLAGS = -avoid-version -module
+test_testext_la_SOURCES = test/testext.cc
+runtime_la_LDFLAGS = -avoid-version -module
+runtime_la_SOURCES = %libRuntimeSources%
+
+if HAVE_GTK
+pkglib_LTLIBRARIES += _gtk.la
+_gtk_la_LDFLAGS = -avoid-version -module @GTK_LIBS@ @GTK_CFLAGS@
+_gtk_la_CXXFLAGS = @GTK_CFLAGS@
+_gtk_la_SOURCES = opt/_gtk.cc
+endif
+
+if HAVE_PCRE
+pkglib_LTLIBRARIES += _pcre.la
+_pcre_la_LDFLAGS = -avoid-version -module @PCRE_LIBS@ @PCRE_CFLAGS@
+_pcre_la_CXXFLAGS = @PCRE_CFLAGS@
+_pcre_la_SOURCES = opt/_pcre.cc
+endif
+
+if HAVE_SDL
+pkglib_LTLIBRARIES += _sdl.la
+_sdl_la_LDFLAGS = -avoid-version -module @SDL_LIBS@
+_sdl_la_CXXFLAGS = @SDL_CFLAGS@
+_sdl_la_SOURCES = opt/_sdl.cc
+endif
+
+if HAVE_GL
+pkglib_LTLIBRARIES += _gl.la
+_gl_la_LDFLAGS = -avoid-version -module @GL_LIBS@
+_gl_la_CXXFLAGS = @GL_LIBS@
+_gl_la_SOURCES = opt/_gl.cc
+endif
+
+noinst_HEADERS = \
+    builder/Builder.h \
+    builder/llvm/ArrayTypeDef.h \
+    builder/llvm/BBranchPoint.h \
+    builder/llvm/BBuilderContextData.h \
+    builder/llvm/BCleanupFrame.h \
+    builder/llvm/BFieldRef.h \
+    builder/llvm/BFuncDef.h \
+    builder/llvm/BModuleDef.h \
+    builder/llvm/BResultExpr.h \
+    builder/llvm/BTypeDef.h \
+    builder/llvm/Consts.h \
+    builder/llvm/DebugInfo.h \
+    builder/llvm/FuncBuilder.h \
+    builder/llvm/Incompletes.h \
+    builder/llvm/LLVMBuilder.h \
+    builder/llvm/Ops.h \
+    builder/llvm/PlaceholderInstruction.h \
+    builder/llvm/VTableBuilder.h \
+    builder/llvm/Utils.h \
+    builder/llvm/VarDefs.h \
+    model/AllocExpr.h \
+    model/Annotation.h \
+    model/ArgDef.h \
+    model/AssignExpr.h \
+    model/Branchpoint.h \
+    model/BuilderContextData.h \
+    model/CleanupFrame.h \
+    model/CompositeNamespace.h \
+    model/ConstVarDef.h \
+    model/Context.h \
+    model/Expr.h \
+    model/FloatConst.h \
+    model/FuncAnnotation.h \
+    model/FuncCall.h \
+    model/FuncDef.h \
+    model/GlobalNamespace.h \
+    model/Initializers.h \
+    model/InstVarDef.h \
+    model/IntConst.h \
+    model/LocalNamespace.h \
+    model/ModuleDef.h \
+    model/Namespace.h \
+    model/NullConst.h \
+    model/OverloadDef.h \
+    model/PrimFuncAnnotation.h \
+    model/ResultExpr.h \
+    model/StrConst.h \
+    model/StubDef.h \
+    model/TernaryExpr.h \
+    model/TypeDef.h \
+    model/VarDef.h \
+    model/VarDefImpl.h \
+    model/VarRef.h \
+    parser/Location.h \
+    parser/LocationMap.h \
+    parser/ParseError.h \
+    parser/Parser.h \
+    parser/Token.h \
+    parser/Toker.h \
+    runtime/Dir.h \
+    runtime/Net.h \
+    runtime/Util.h \
+    spug/Exception.h \
+    spug/RCBase.h \
+    spug/RCPtr.h \
+    spug/StringFmt.h \
+    spug/TypeInfo.h \
+    compiler/init.h \
+    Crack.h
+
+pkginclude_HEADERS = \
+    compiler/Annotation.h \
+    compiler/CrackContext.h \
+    compiler/Location.h \
+    compiler/Token.h \
+    ext/Func.h \
+    ext/Module.h \
+    ext/Object.h \
+    ext/RCObj.h \
+    ext/Type.h \
+    ext/Var.h \
+    ext/crack_config.h
+
+EXTRA_DIST = doc lib test Credits CMakeLists.txt sourceModules.txt \
+    runtimeModules.txt cmake COPYING COPYING.Lesser
+
+bin_PROGRAMS = crack
+
+crack_SOURCES = crack.cc
+crack_LDADD = libcrack.la $(LDFLAGS)
+# use LLVM flags, but override their "--no-exceptions" flag.
+AM_CXXFLAGS = @LLVM_CXXFLAGS@ -fexceptions
+
+# install under prefix/lib instead of libdir so it's not platform dependent.
+cracklib = ${prefix}/lib/crack-${VERSION}
+AM_CPPFLAGS = -DCRACKLIB=\"${cracklib}\"
+
+TESTS = test/run_all_tests
+
+doc/Manual.html: doc/Manual.nml
+	@if which nml2html >/dev/null; then echo generating $@; nml2html $?; \
+	else \
+	   echo "To regenerate the manual, you need the nml2html tool and "; \
+	   echo "the spug libraries."; \
+	fi
+
+install-data-local: doc/Manual.html
+	$(MKDIR_P) $(DESTDIR)$(cracklib)
+	$(MKDIR_P) $(DESTDIR)$(cracklib)/crack
+	(for ext in _gtk _pcre _sdl _gl; do \
+	   if test -e .libs/$$ext.so; then \
+	       mkdir -p lib/crack/ext; \
+	       ln .libs/$$ext.so lib/crack/ext; \
+	   fi;
+	 done)
+	(cd $(srcdir)/lib; \
+	 for file in $$(find); do \
+	   if test -d $$file; then \
+	       $(MKDIR_P) $(DESTDIR)$(cracklib)/$$file; \
+	   else \
+	       $(INSTALL) $$file $(DESTDIR)$(cracklib)/$$file; \
+	   fi; \
+	 done)
+	$(MKDIR_P) $(DESTDIR)$(docdir)
+	$(INSTALL) $(srcdir)/doc/Manual.html $(DESTDIR)$(docdir)
+
+install-exec-local:
+	ln -f $(DESTDIR)$(bindir)/crack $(DESTDIR)$(bindir)/crack$(VERSION)
+
+uninstall-local:
+	rm -r $(DESTDIR)$(cracklib)
+	rm -r $(DESTDIR)$(docdir)
+	rm $(DESTDIR)$(bindir)/crack$(VERSION)
