@@ -1,0 +1,193 @@
+// A test suite for crack
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.io cout, cerr, Formatter, Writer, StringWriter;
+import crack.sys argv, exit;
+import crack.container List, Iterator, TreeMap, KeyVal;
+import crack.exp.dir Directory;
+import crack.exp.file File, FileInfo;
+import crack.exp.regex Regex;
+
+SCREEN_VERSION := ".2";
+
+class Test {
+
+    FileInfo _fInfo;
+    String _desc;
+    TreeMap _testData = {};
+    
+    String _isSkipped;
+
+    oper init(): _desc("Unknown") { }
+
+    void loadTemplate() {
+        
+        f := File(_fInfo.name, "r");
+        if (!f.isValid()) {
+            cout `file: $(_fInfo.name) could not be opened!\n`;
+            _isSkipped = "unable to open";
+            return;
+        }
+        
+        // parse out sections
+        String lineBuf, curSection;
+        StringWriter dataBuf = {};
+        headerPat := Regex('^--(\\w+)--$');
+        while (lineBuf = f.nextLine()) {
+            //cerr `debug: $lineBuf`;
+            // look for section change
+            m := headerPat.search(lineBuf);
+            if (m) {
+                if (curSection)
+                    _testData[curSection] = dataBuf.createString();
+                curSection = m.group(1);
+                //cerr `debug: switching to group $curSection\n`;
+                dataBuf = StringWriter();
+            }
+            else {
+                // add line to current section
+                dataBuf.write(lineBuf);
+                if (curSection == 'TEST')
+                    _desc = String(lineBuf, 0, lineBuf.size-1);
+            }
+        }
+        
+    }
+
+    /// ensure test has required sections and that they contain valid data
+    /// also check to see if we're skipping this test for some reason
+    void checkTemplate() {        
+        if (!_testData["FILE"]) {
+            _isSkipped = "the template was missing a FILE section";
+        }
+    }
+
+    void writeScript(Directory outDir) {
+        
+        outName := outDir.nameWithTrailing()+_fInfo.basename(true) + ".crk";
+        
+        //cout `writing: $outName\n`;
+        
+        out := File(outName,"w");        
+        out.write(String.cast(_testData["FILE"]));
+        
+    }
+
+    void run(Directory outDir) {
+        
+        if (_isSkipped) {
+            cout `$_isSkipped\n`;
+            return;
+        }
+
+        writeScript(outDir);
+
+        cout `[$_fInfo]: `;
+        
+        cout `\n`;
+
+    }
+
+    oper init(FileInfo info): _fInfo = info,
+                              _desc("Unknown") {
+        loadTemplate();
+        checkTemplate();
+    }
+
+    void _dump(Writer out) {
+        ti := _testData.iter();
+        while (ti.nx()) {
+            section := String.cast(KeyVal.cast(ti.elem()).key);
+            data := String.cast(KeyVal.cast(ti.elem()).val);
+            Formatter(out) `[$section]:\n$data`;
+        }
+    }
+
+    void writeTo(Writer out) {
+        Formatter(out) `[$_fInfo]: $_desc\n`;
+        //_dump(out);
+    }
+
+}
+
+class TestSuite {
+
+    String _rootDir, _outDir;
+    List _testList = {};
+    
+    void usage() {
+        cout `screen <test dir> <output dir>\n`;
+        exit(1);
+    }
+    
+    void scanForTests(Directory dir) {
+    
+        if (!dir.isValid()) {
+            cerr `skipping invalid directory: $dir\n`;
+            return;
+        }
+        
+        cout `importing tests from $dir ...\n`;
+
+        Iterator i;
+        
+        // gather test files
+        FileInfo curFile;
+        i = dir.fileInfoIter();
+        while (i.nx()) {
+            curFile = FileInfo.cast(i.elem());
+            if (curFile.matches("*.crkt")) {
+                //cout `found test template file: $curFile\n`;
+                test := Test(curFile);
+                _testList.append(test);
+            }
+        }
+
+        // recurse to directories
+        Directory nextDir;
+        i = dir.dirIter();
+        while (i.nx()) {
+            nextDir = Directory.cast(i.elem());
+            scanForTests(nextDir);
+        }
+    }
+
+    void runTests(Directory dir) {
+
+        if (!dir.isValid()) {
+            cerr `invalid output directory: $dir\n`;
+            return;
+        }
+        
+        cout `\nrunning tests with output in $dir...\n`;
+
+        Test curTest;
+
+        i := _testList.iter();
+        while (i.nx()) {
+            curTest = Test.cast(i.elem());
+            curTest.run(dir);
+        }
+
+    }
+
+    oper init() {
+        
+        if (argv.count() <= 2) {
+            usage();            
+        }
+
+        cout `screen v$(SCREEN_VERSION): now testing for crack\n`;
+
+        _rootDir = argv[1];
+        _outDir = argv[2];
+        
+        scanForTests(Directory(_rootDir));
+
+        runTests(Directory(_outDir, false));
+        
+    }
+
+}
+
+suite := TestSuite();
