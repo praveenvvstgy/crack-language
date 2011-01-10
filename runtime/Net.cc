@@ -8,7 +8,11 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <stdint.h>
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#else
 #include <malloc.h>
+#endif
 #include <errno.h>
 #include <signal.h>
 
@@ -39,20 +43,24 @@ static Constants constants = {
     AF_INET,
     AF_INET6,
     AF_IPX,
+#ifndef __APPLE__
     AF_NETLINK,
     AF_X25,
     AF_AX25,
     AF_ATMPVC,
-    AF_APPLETALK,
     AF_PACKET,
+#endif
+    AF_APPLETALK,
     SOCK_STREAM,
     SOCK_DGRAM,
     SOCK_SEQPACKET,
     SOCK_RAW,
     SOCK_RDM,
+#ifndef __APPLE__
     SOCK_PACKET,
     SOCK_NONBLOCK,
     SOCK_CLOEXEC,
+#endif
     SOL_SOCKET,
     SO_REUSEADDR,
     POLLIN,
@@ -172,12 +180,25 @@ int PollSet_next(struct pollfd *set, unsigned int size, unsigned int index,
 int PollSet_poll(struct pollfd *fds, unsigned int nfds, TimeVal *tv,
                  sigset_t *sigmask
                  ) {
+#ifdef __APPLE__
+    int ready;
+    sigset_t origmask;
+    sigprocmask(SIG_SETMASK, sigmask, &origmask);
+    if (tv) {
+        ready = poll(fds, nfds, (tv->secs*1000)+(tv->nsecs/1000));
+    } else {
+        ready = poll(fds, nfds, 0);
+    }
+    sigprocmask(SIG_SETMASK, &origmask, NULL);
+    return ready;
+#else
     if (tv) {
         struct timespec ts = {tv->secs, tv->nsecs};
         return ppoll(fds, nfds, &ts, sigmask);
     } else {
         return ppoll(fds, nfds, 0, sigmask);
     }
+#endif
 }
 
 sigset_t *SigSet_create() {
