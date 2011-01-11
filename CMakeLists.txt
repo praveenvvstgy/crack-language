@@ -117,11 +117,13 @@ install(TARGETS crack-runtime
         )
 
 install(FILES doc/Manual.html DESTINATION share/doc/crack)
-# todo: a better scheme that saves directory structure of lib directory
-FILE(GLOB lib_files_root lib/crack/*.crk)
-install(FILES ${lib_files_root} DESTINATION "lib/crack-${CRACK_VERSION}/crack")
-FILE(GLOB lib_files_exp lib/crack/exp/*.crk)
-install(FILES ${lib_files_exp} DESTINATION "lib/crack-${CRACK_VERSION}/crack/exp")
+
+# install library modules and extensions
+install(DIRECTORY lib/crack DESTINATION "lib/crack-${CRACK_VERSION}"
+        FILES_MATCHING PATTERN "*.crk")
+install(DIRECTORY .libs/ DESTINATION "lib/crack-${CRACK_VERSION}/crack/ext"
+        FILES_MATCHING PATTERN "_*.so")
+
 
 # test suite
 add_custom_target(check 
@@ -208,5 +210,21 @@ if(OPENGL_FOUND AND !APPLE)
                       )
    target_link_libraries( gl
                           ${OPENGL_LIBRARIES}
+                         )
+endif()
+
+# Cairo
+find_package(Cairo)
+if(CAIRO_FOUND)
+   message(STATUS "Found Cairo, will build extension")
+   add_library(cairo SHARED opt/_cairo.cc)
+   set_target_properties(cairo
+                      PROPERTIES
+                      OUTPUT_NAME _cairo
+                      PREFIX ""
+                      LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
+                      )
+   target_link_libraries( cairo
+                          ${CAIRO_LDFLAGS} 
                          )
 endif()
