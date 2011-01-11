@@ -269,6 +269,9 @@
    class cairo_t;
    class cairo_surface_t;
    class cairo_device_t;
+   
+   // MAtrix
+   @inject 'cairo_matrix_t *cairo_matrix_new() { return new cairo_matrix_t; }\n'
    class cairo_matrix_t;
    class cairo_pattern_t;
    
@@ -1021,7 +1024,7 @@
                                         //~ FcPattern                   pattern);
 
    const uint32
-       CAIRO_SVG_VERSION_1_1 const uint32
+       CAIRO_SVG_VERSION_1_1,
        CAIRO_SVG_VERSION_1_2;
 
 
