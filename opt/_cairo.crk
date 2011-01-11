@@ -269,7 +269,11 @@
    class cairo_t;
    class cairo_surface_t;
    class cairo_device_t;
+   
+   // MAtrix
+   @inject 'cairo_matrix_t *cairo_matrix_new() { return new cairo_matrix_t; }\n'
    class cairo_matrix_t;
+   cairo_matrix_t cairo_matrix_new();
    class cairo_pattern_t;
    
    // Rectangle
@@ -277,6 +281,7 @@
    class cairo_rectangle_t{
       float64 x, y, width, height;
    }
+   cairo_rectangle_t cairo_rectangle_new();
 
    // Rectangle list
    @inject 'cairo_rectangle_list_t *cairo_rectangle_list_new() { return new cairo_rectangle_list_t; }\n'
