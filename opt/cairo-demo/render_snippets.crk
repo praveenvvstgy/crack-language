@@ -25,6 +25,7 @@ import snippetBase snippetClass;
 import arc arcClass, arcNegativeClass;
 import clip clipClass, clipImageClass;
 import curve curveRectangleClass, curveClass, curveDashClass;
+import fill fillStrokeClass, fillStyleClass, fillGradientClass;
 
 int IMAGE_WIDTH = 256;
 int IMAGE_HEIGHT = 256;
@@ -86,7 +87,7 @@ class pdfSurface:baseSurface{
 
 @GenericObjArray(snippetArray, snippetClass);
 
-snippets:=snippetArray(7); // Array of drawing objects
+snippets:=snippetArray(10); // Array of drawing objects
 snippets.append(arcClass());
 snippets.append(arcNegativeClass());
 snippets.append(clipClass());
@@ -94,6 +95,11 @@ snippets.append(clipImageClass());
 snippets.append(curveRectangleClass());
 snippets.append(curveClass());
 snippets.append(curveDashClass());
+snippets.append(fillStrokeClass());
+snippets.append(fillStyleClass());
+snippets.append(fillGradientClass());
+
+
 
 // Create drawings
 for (sn :in snippets){
