@@ -1,9 +1,10 @@
 # Conrad Steenberg <conrad.steenberg@gmail.com>
-#
-# Render 
+# Jan 10, 2011
+# Render snippets 
 
 import crack.lang CString, Buffer;
-import crack.io cout;
+import crack.io cout, StringFormatter;
+//~ import crack.container Array, ArrayIter;
 import crack.ext._cairo    cairo_surface_t, cairo_t, cairo_image_surface_create,
                            CAIRO_FORMAT_ARGB32, cairo_create, cairo_move_to,
                            cairo_line_to, cairo_rel_line_to,
@@ -17,69 +18,100 @@ import crack.ext._cairo    cairo_surface_t, cairo_t, cairo_image_surface_create,
                            CAIRO_PS_LEVEL_2, CAIRO_PS_LEVEL_3,
                            cairo_svg_surface_create, cairo_svg_version_to_string,
                            CAIRO_SVG_VERSION_1_2;
-import crack.math PI, sqrt;
+import crack.lang die, free;
+import snippetBase snippetClass;
+@import crack.exp.cont.array GenericObjArray, GenericArray, GenericPrimArray;
 
-void draw(cairo_t cr, cairo_surface_t surface){
-   cairo_scale (cr, 120, 120);
+import arc arcClass, arcNegativeClass;
+import clip clipClass, clipImageClass;
+import curve curveRectangleClass, curveClass, curveDashClass;
 
-   cairo_set_line_width (cr, 0.1);
-   cairo_set_source_rgb (cr, 0, 0, 0);
+int IMAGE_WIDTH = 256;
+int IMAGE_HEIGHT = 256;
 
-   // Draw some lines and curves
-   cairo_move_to (cr, 0.25, 0.25);
-   cairo_line_to (cr, 0.5, 0.375);
-   cairo_rel_line_to (cr, 0.25, -0.125);
-   cairo_arc (cr, 0.5, 0.5, 0.25 * sqrt(2), -0.25 * PI, 0.25 * PI);
-   cairo_rel_curve_to (cr, -0.25, -0.125, -0.25, 0.125, -0.5, 0);
-   cairo_close_path (cr);
-   cairo_stroke (cr);
-   cairo_surface_flush (surface);
+float X_INCHES = 4;
+float Y_INCHES = 4;
+
+int PT_WIDTH = int(X_INCHES * 72.0);
+int PT_HEIGHT = int(Y_INCHES * 72.0);
+
+class baseSurface: Object{
+   cairo_t cr;
+   cairo_surface_t surface;
+   uint32 status;
+   
+   oper init() {}
+
+   void write(){
+      cairo_destroy (cr);
+      cr=null;
+      cairo_surface_destroy (surface);
+      surface=null;
+   }
 }
 
-// Create the surface and context
-cairo_surface_t surface;
-cairo_t cr;
-uint32 status;
-
 // PNG surface
-surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, 120, 120);
-cr = cairo_create (surface);
-draw(cr, surface);
-// Write surface to PNG file
-status = cairo_surface_write_to_png (surface, CString("path-close.png").buffer);
-
-// Clean up
-cairo_destroy (cr);
-cairo_surface_destroy (surface);
+class pngSurface:baseSurface{
+   CString _fname;
+   oper init(StaticString fname, int width, int height)
+   {
+      surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
+      cr = cairo_create (surface);
+      StringFormatter sout={};
+      sout `$(fname).png`;
+      tmp:=sout.createCString();
+      _fname=CString(sout.createCString());
+      cout `fname=$(_fname)\n`;
+   }
+   
+   void write(){
+      status = cairo_surface_write_to_png (surface, _fname.buffer);
+      baseSurface.write();
+   }
+}
 
 // PDF surface
-surface = cairo_pdf_surface_create (CString("path-close.pdf").buffer, 120, 120);
-cr = cairo_create (surface);
-draw(cr, surface);
-
-// Clean up
-cairo_destroy (cr);
-cairo_surface_destroy (surface);
-
-// PS surface
-surface = cairo_ps_surface_create (CString("path-close.ps").buffer, 120, 120);
-pslevel:=CString(cairo_ps_level_to_string (CAIRO_PS_LEVEL_2), false);
-cr = cairo_create (surface);
-draw(cr, surface);
-
-// Clean up
-cairo_destroy (cr);
-cairo_surface_destroy (surface);
-
-// SVG surface
-surface = cairo_svg_surface_create (CString("path-close.svg").buffer, 120, 120);
-svgversion:=CString(cairo_svg_version_to_string (CAIRO_SVG_VERSION_1_2),false);
-cr = cairo_create (surface);
-draw(cr, surface);
-
-// Clean up
-cairo_destroy (cr);
-cairo_surface_destroy (surface);
+class pdfSurface:baseSurface{
+   oper init(StaticString fname, int width, int height)
+   {
+      StringFormatter sout = {};
+      sout `$(fname).pdf`;
+      int dpi=64;
+      surface = cairo_pdf_surface_create (sout.createCString().buffer, width/dpi*72, height/dpi*72);
+      cr = cairo_create (surface);
+      cout `fname=$(fname).pdf\n`
+   }
+}
 
 
+@GenericObjArray(snippetArray, snippetClass);
+
+snippets:=snippetArray(7); // Array of drawing objects
+snippets.append(arcClass());
+snippets.append(arcNegativeClass());
+snippets.append(clipClass());
+snippets.append(clipImageClass());
+snippets.append(curveRectangleClass());
+snippets.append(curveClass());
+snippets.append(curveDashClass());
+
+// Create drawings
+for (sn :in snippets){
+   pngSurface png = {sn.name, 256, 256};
+   sn.draw(png.cr, png.surface);
+   png.write();
+
+   pdfSurface pdf = {sn.name, 256, 256};
+   sn.draw(pdf.cr, pdf.surface);
+   pdf.write();
+
+}
+
+//~ arc:=arcNegativeClass();
+//~ png:=pngSurface("arc_negative", IMAGE_WIDTH, IMAGE_HEIGHT);
+//~ arc.draw(png.cr, png.surface);
+//~ png.write();
+//~ pdf:=pdfSurface("arc", PT_WIDTH, PT_HEIGHT);
+//~ arc.draw(pdf.cr, pdf.surface);
+//~ pdf.write();
 cout `ok\n`;
