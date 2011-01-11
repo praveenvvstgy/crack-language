@@ -43,6 +43,16 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
         params[0] = type_byteptr;
         array_pbyteptr_q = array->getSpecialization(params);
     }
+    crack::ext::Type *type_cairo_font_options_t = mod->addType("cairo_font_options_t");
+    type_cairo_font_options_t->finish();
+
+
+    crack::ext::Type *array_pcairo__font__options__t_q;
+    {
+        std::vector<crack::ext::Type *> params(1);
+        params[0] = type_cairo_font_options_t;
+        array_pcairo__font__options__t_q = array->getSpecialization(params);
+    }
     crack::ext::Type *type_cairo_glyph_t = mod->addType("cairo_glyph_t");
     type_cairo_glyph_t->finish();
 
@@ -129,9 +139,6 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
 
     crack::ext::Type *type_cairo_font_face_t = mod->addType("cairo_font_face_t");
     type_cairo_font_face_t->finish();
-
-    crack::ext::Type *type_cairo_font_options_t = mod->addType("cairo_font_options_t");
-    type_cairo_font_options_t->finish();
 
     crack::ext::Type *type_cairo_path_data_t = mod->addType("cairo_path_data_t");
     type_cairo_path_data_t->finish();
@@ -948,6 +955,30 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
                      );
     f->addArg(type_cairo_scaled_font_t, "scaled_font");
 
+    f = mod->addFunc(type_void, "cairo_scaled_font_get_font_matrix",
+                     (void *)cairo_scaled_font_get_font_matrix
+                     );
+    f->addArg(type_cairo_scaled_font_t, "scaled_font");
+    f->addArg(array_pcairo__matrix__t_q, "font_matrix");
+
+    f = mod->addFunc(type_void, "cairo_scaled_font_get_ctm",
+                     (void *)cairo_scaled_font_get_ctm
+                     );
+    f->addArg(type_cairo_scaled_font_t, "scaled_font");
+    f->addArg(array_pcairo__matrix__t_q, "ctm");
+
+    f = mod->addFunc(type_void, "cairo_scaled_font_get_scale_matrix",
+                     (void *)cairo_scaled_font_get_scale_matrix
+                     );
+    f->addArg(type_cairo_scaled_font_t, "scaled_font");
+    f->addArg(array_pcairo__matrix__t_q, "scale_matrix");
+
+    f = mod->addFunc(type_void, "cairo_scaled_font_get_font_options",
+                     (void *)cairo_scaled_font_get_font_options
+                     );
+    f->addArg(type_cairo_scaled_font_t, "scaled_font");
+    f->addArg(array_pcairo__font__options__t_q, "options");
+
     f = mod->addFunc(type_cairo_font_face_t, "cairo_toy_font_face_create",
                      (void *)cairo_toy_font_face_create
                      );
@@ -1047,7 +1078,7 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
                      (void *)cairo_get_matrix
                      );
     f->addArg(type_cairo_t, "cr");
-    f->addArg(type_cairo_matrix_t, "matrix");
+    f->addArg(array_pcairo__matrix__t_q, "matrix");
 
     f = mod->addFunc(type_cairo_surface_t, "cairo_get_target",
                      (void *)cairo_get_target
@@ -1204,11 +1235,26 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
     f->addArg(type_cairo_surface_t, "surface");
     f->addArg(type_byteptr, "filename");
 
+    f = mod->addFunc(type_uint32, "cairo_surface_write_to_png_stream",
+                     (void *)cairo_surface_write_to_png_stream
+                     );
+    f->addArg(type_cairo_surface_t, "surface");
+    f->addArg(type_voidptr, "write_func");
+    f->addArg(type_voidptr, "closure");
+
     f = mod->addFunc(type_voidptr, "cairo_surface_get_user_data",
                      (void *)cairo_surface_get_user_data
                      );
     f->addArg(type_cairo_surface_t, "surface");
     f->addArg(type_cairo_user_data_key_t, "key");
+
+    f = mod->addFunc(type_uint32, "cairo_surface_set_user_data",
+                     (void *)cairo_surface_set_user_data
+                     );
+    f->addArg(type_cairo_surface_t, "surface");
+    f->addArg(type_cairo_user_data_key_t, "key");
+    f->addArg(type_voidptr, "user_data");
+    f->addArg(type_voidptr, "destroy");
 
     f = mod->addFunc(type_void, "cairo_surface_get_mime_data",
                      (void *)cairo_surface_get_mime_data
@@ -1217,6 +1263,16 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
     f->addArg(type_byteptr, "mime_type");
     f->addArg(array_pbyteptr_q, "data");
     f->addArg(array_puint64_q, "length");
+
+    f = mod->addFunc(type_uint32, "cairo_surface_set_mime_data",
+                     (void *)cairo_surface_set_mime_data
+                     );
+    f->addArg(type_cairo_surface_t, "surface");
+    f->addArg(type_byteptr, "mime_type");
+    f->addArg(type_byteptr, "data");
+    f->addArg(type_uint64, "length");
+    f->addArg(type_voidptr, "destroy");
+    f->addArg(type_voidptr, "closure");
 
     f = mod->addFunc(type_void, "cairo_surface_get_font_options",
                      (void *)cairo_surface_get_font_options

@@ -1021,7 +1021,7 @@
                                         //~ FcPattern                   pattern);
 
    const uint32
-       CAIRO_SVG_VERSION_1_1,
+       CAIRO_SVG_VERSION_1_1 const uint32
        CAIRO_SVG_VERSION_1_2;
 
 
