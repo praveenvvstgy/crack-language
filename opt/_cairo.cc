@@ -5,6 +5,7 @@
 #include <cairo-xlib.h>
 #include <cairo-features.h>
 #include <X11/Xlib.h>
+cairo_matrix_t *cairo_matrix_new() { return new cairo_matrix_t; }
 cairo_rectangle_t *cairo_rectangle_new() { return new cairo_rectangle_t; }
 cairo_rectangle_list_t *cairo_rectangle_list_new() { return new cairo_rectangle_list_t; }
 cairo_text_extents_t *cairo_text_extents_new() { return new cairo_text_extents_t; }
@@ -189,6 +190,14 @@ void crack_ext__cairo_init(crack::ext::Module *mod) {
     crack::ext::Type *type_uint = mod->getUintType();
     crack::ext::Type *type_void = mod->getVoidType();
     crack::ext::Type *type_voidptr = mod->getVoidptrType();
+
+    f = mod->addFunc(type_cairo_matrix_t, "cairo_matrix_new",
+                     (void *)cairo_matrix_new
+                     );
+
+    f = mod->addFunc(type_cairo_rectangle_t, "cairo_rectangle_new",
+                     (void *)cairo_rectangle_new
+                     );
 
     f = mod->addFunc(type_cairo_rectangle_list_t, "cairo_rectangle_list_new",
                      (void *)cairo_rectangle_list_new
