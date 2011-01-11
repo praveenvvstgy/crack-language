@@ -1,0 +1,93 @@
+import crack.math PI;
+import crack.lang CString;
+import snippetBase snippetClass;
+import crack.ext._cairo cairo_t, cairo_surface_t, cairo_set_line_width,
+                         cairo_arc, cairo_stroke, cairo_set_source_rgba,
+                         cairo_fill, cairo_line_to, cairo_move_to,
+                         cairo_curve_to, cairo_close_path,
+                         cairo_new_sub_path, cairo_set_source_rgb,
+                         cairo_fill_preserve, cairo_set_dash,
+                         cairo_rel_line_to;
+
+class curveRectangleClass:snippetClass{
+   oper init(){
+      name="curve_rectangle";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      /* a custom shape that could be wrapped in a function */
+      float64 x         = 25.6,        /* parameters like cairo_rectangle */
+             y         = 25.6,
+             width         = 204.8,
+             height        = 204.8,
+             aspect        = 1.0,     /* aspect ratio */
+             corner_radius = height / 10.0;   /* and corner curvature radius */
+
+      float64 radius = corner_radius / aspect;
+      float64 degrees = PI / 180.0;
+
+      cairo_new_sub_path (cr);
+      cairo_arc (cr, x + width - radius, y + radius, radius, -90 * degrees, 0 * degrees);
+      cairo_arc (cr, x + width - radius, y + height - radius, radius, 0 * degrees, 90 * degrees);
+      cairo_arc (cr, x + radius, y + height - radius, radius, 90 * degrees, 180 * degrees);
+      cairo_arc (cr, x + radius, y + radius, radius, 180 * degrees, 270 * degrees);
+      cairo_close_path (cr);
+
+      cairo_set_source_rgb (cr, 0.5, 0.5, 1);
+      cairo_fill_preserve (cr);
+      cairo_set_source_rgba (cr, 0.5, 0, 0, 0.5);
+      cairo_set_line_width (cr, 10.0);
+      cairo_stroke (cr);
+   }
+}
+
+class curveClass:snippetClass{
+   oper init(){
+      name="curve";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      float64 x=25.6,  y=128.0;
+      float64 x1=102.4, y1=230.4,
+             x2=153.6, y2=25.6,
+             x3=230.4, y3=128.0;
+
+      cairo_move_to (cr, x, y);
+      cairo_curve_to (cr, x1, y1, x2, y2, x3, y3);
+
+      cairo_set_line_width (cr, 10.0);
+      cairo_stroke (cr);
+
+      cairo_set_source_rgba (cr, 1, 0.2, 0.2, 0.6);
+      cairo_set_line_width (cr, 6.0);
+      cairo_move_to (cr,x,y);   cairo_line_to (cr,x1,y1);
+      cairo_move_to (cr,x2,y2); cairo_line_to (cr,x3,y3);
+      cairo_stroke (cr);
+   }
+}
+
+class curveDashClass:snippetClass{
+   oper init(){
+      name="curve_dash";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      dashes := array[float64](4);
+      dashes[0] = 50.0;
+      dashes[1] = 10.0;
+      dashes[2] = 10.0;
+      dashes[3] = 10.0;
+      int    ndash  = 4;
+      float64 offset = -50.0;
+
+      cairo_set_dash (cr, dashes, ndash, offset);
+      cairo_set_line_width (cr, 10.0);
+
+      cairo_move_to (cr, 128.0, 25.6);
+      cairo_line_to (cr, 230.4, 230.4);
+      cairo_rel_line_to (cr, -102.4, 0.0);
+      cairo_curve_to (cr, 51.2, 230.4, 51.2, 128.0, 128.0, 128.0);
+
+      cairo_stroke (cr);
+   }
+}
