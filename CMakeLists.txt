@@ -49,7 +49,7 @@ file(STRINGS runtimeModules.txt RUNTIME_SRC_FILES)
 set_source_files_properties( ${CRACK_SRC_FILES}
                              PROPERTIES COMPILE_FLAGS ${LLVM_COMPILE_FLAGS}
                             )
-set_source_files_properties( crack.cc
+set_source_files_properties( crack_main.cc
                              PROPERTIES COMPILE_FLAGS ${LLVM_COMPILE_FLAGS}
                             )
 
@@ -60,6 +60,7 @@ set_target_properties(libcrack
                       VERSION ${CRACK_VERSION}
                       SOVERSION ${API_VERSION}
                       LINK_FLAGS ${LLVM_LDFLAGS}
+                      LINK_INTERFACE_LIBRARIES ""
                       )
 target_link_libraries( libcrack
                        ${LLVM_LIBS}
@@ -82,6 +83,8 @@ set_target_properties(testext
 
 # runtime extension
 add_library( crack-runtime SHARED ${RUNTIME_SRC_FILES} )
+target_link_libraries( crack-runtime
+                       libcrack )
 set_target_properties(crack-runtime
                       PROPERTIES
                       OUTPUT_NAME runtime
@@ -90,7 +93,7 @@ set_target_properties(crack-runtime
                       )
 
 
-add_executable(crack crack.cc)
+add_executable(crack crack_main.cc)
 set_target_properties( crack
                        PROPERTIES LINK_FLAGS ${LLVM_LDFLAGS}
                        # test suite currently expects crack binary in project 
@@ -162,7 +165,7 @@ if(PCRE_LIBRARY AND PCRE_INCLUDE_DIR)
   SET(PCRE_FOUND TRUE)
 endif(PCRE_LIBRARY AND PCRE_INCLUDE_DIR)
 if (PCRE_FOUND)
-   message(STATUS "Found pcre, will build extension")
+   message(STATUS "Found pcre, will build extension: " ${PCRE_INCLUDE_DIR})
    include_directories(${PCRE_INCLUDE_DIR})
    add_library(pcre SHARED opt/_pcre.cc)
    set_target_properties(pcre
@@ -196,8 +199,8 @@ endif()
 
 # OpenGL
 find_package(OpenGL)
-if(OPENGL_FOUND)
-   message(STATUS "Found OpenGL, will build extension")
+if(OPENGL_FOUND AND !APPLE)
+   message(STATUS "Found OpenGL, will build extension: " ${OPENGL_INCLUDE_DIR})
    include_directories(${OPENGL_INCLUDE_DIR})
    add_library(gl SHARED opt/_gl.cc)
    set_target_properties(gl
