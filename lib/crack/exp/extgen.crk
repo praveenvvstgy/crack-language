@@ -7,10 +7,12 @@ import crack.io cout, Formatter, StringFormatter, Writer;
 import crack.compiler CrackContext, Token;
 import crack.exp.file File;
 import crack.exp.error err;
+import crack.exp.regex Regex, Match;
 
 @import crack.exp.ann define;
 @import crack.exp.cont.treemap GenericTreeMap;
 @import crack.exp.cont.array GenericArray, GenericObjArray;
+
 
 class Func;
 
@@ -318,6 +320,7 @@ class Errors : StringFormatter {
 
 class ExtensionData {
     String filename;
+    String symbolFilename;
     TypeMap types;
     FuncArray funcs;
     StringArray module = {};  # module name
@@ -486,6 +489,9 @@ class ExtensionData {
                 preamble.append(_parseString(ctx));
             } else if (ann == 'crack_internal') {
                 inSrcDir = true;
+            }
+            else if (ann == 'dumpsymbols') {
+                symbolFilename = _parseString(ctx);
             } else {
                 error(ctx, tok) `Unexpected annotation: $ann`;
             }
@@ -652,6 +658,55 @@ void $(join(module, '_'))_init(crack::ext::Module *mod) {
         out := Formatter(File(filename, 'w'));
         emitCode(out);
     }
+
+    void emitSymbols(Writer out) {
+        o := Formatter(out);
+        uint i=0;
+
+        rx := Regex('array');
+        Match m;
+        o `// Types\n`;
+        for (kv :in types){
+            m = rx.search(kv.key);
+            if (m && m.begin() == 0 && m.end() == 5) {
+               continue;
+            }
+
+            if (!kv.val.isBuiltIn()){
+               if (i>0) o `, `;
+               o `$(kv.key)`;
+               i++;
+            }
+         }
+         if (i==0) cout `(None)`;
+        
+        o `\n\n// Functions\n`;
+        i=0;
+        for (func :in funcs) {
+            if (i>0) o `, `;
+            o `$(func.name)`;
+            i++;
+        }
+        if (i==0) cout `(None)`;
+
+        o `\n\n// Constants\n`;
+        i=0;
+        for (c :in consts) {
+            if (i>0) o `, `;
+            o `$(c.ident)`;
+            i++;
+        }
+        if (i==0) cout `(None)`;
+    }
+
+
+    void symbols() {
+        # write all symbols to file
+        cout `writing symbols to $symbolFilename\n`;
+        out := Formatter(File(symbolFilename, 'w'));
+        emitSymbols(out);
+    }
+
 }
 
 void generateExtension(CrackContext ctx) {
@@ -661,4 +716,7 @@ void generateExtension(CrackContext ctx) {
         ctx.error('no filename specified'.buffer);
     else
         ext.emit();
+
+    if (ext.symbolFilename)
+        ext.symbols();
 }
