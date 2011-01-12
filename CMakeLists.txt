@@ -74,6 +74,8 @@ configure_file("${PROJECT_SOURCE_DIR}/ext/crack_config.h.in"
 # test extension. we set this up to mirror the autoconf
 # build
 add_library(testext SHARED test/testext.cc)
+target_link_libraries( testext
+                       libcrack )
 set_target_properties(testext
                       PROPERTIES
                       OUTPUT_NAME testext
