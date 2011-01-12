@@ -35,6 +35,7 @@ import crack.ext._cairo cairo_surface_t;
 
 @generateExtension crack.ext._cairosdl {
    @filename 'opt/_cairosdl.cc'
+   @dumpsymbols 'opt/_cairosdl.txt'
    @inject '#include "cairosdl.h"\n'
    @crack_internal
 
