@@ -294,7 +294,11 @@ ModuleDefPtr Crack::loadModule(Crack::StringVecIter moduleNameBegin,
     // look for a shared library
     ModulePath modPath = searchPath(sourceLibPath, moduleNameBegin,
                                     moduleNameEnd,
+#ifdef __APPLE__
+                                    ".dylib"
+#else
                                     ".so"
+#endif
                                     );
     
     ModuleDefPtr modDef;
