@@ -1,5 +1,9 @@
-#include "cairosdl.h"
-
+#include "opt/cairosdl.h"
+#include "opt/_cairo.h"
+#include "opt/_sdl.h"
+void *cairosdl_surface_create_void (void *sdl_surface){ 
+   return cairosdl_surface_create((SDL_Surface *)sdl_surface);
+}
 
 #include "ext/Module.h"
 #include "ext/Type.h"
@@ -49,6 +53,11 @@ void crack_ext__cairosdl_init(crack::ext::Module *mod) {
                      (void *)cairosdl_surface_create
                      );
     f->addArg(type_SDL_Surface, "sdl_surface");
+
+    f = mod->addFunc(type_voidptr, "cairosdl_surface_create_void",
+                     (void *)cairosdl_surface_create_void
+                     );
+    f->addArg(type_voidptr, "sdl_surface");
 
     f = mod->addFunc(type_SDL_Surface, "cairosdl_surface_get_target",
                      (void *)cairosdl_surface_get_target

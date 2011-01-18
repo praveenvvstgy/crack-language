@@ -31,13 +31,25 @@
  //
 
 @import crack.exp.extgen generateExtension;
-import crack.ext._cairo cairo_surface_t;
+import crack.ext._cairo cairo_surface_t, cairo_t;
+import crack.ext._sdl SDL_Surface, SDL_Rect;
 
 @generateExtension crack.ext._cairosdl {
    @filename 'opt/_cairosdl.cc'
    @dumpsymbols 'opt/_cairosdl.txt'
-   @inject '#include "cairosdl.h"\n'
+   @inject '#include "opt/cairosdl.h"\n'
+   @inject 'void *cairosdl_surface_create_void (void *sdl_surface){ 
+   return cairosdl_surface_create((SDL_Surface *)sdl_surface);
+}'
+
    @crack_internal
+
+   // Some class definitions for externs; FIXME
+   class cairo_surface_t;
+   class cairo_t;
+   class SDL_Surface;
+   class SDL_Rect;
+
 
    // Constants
    /* Cairo pixel configuration.  This isn't tweakable, it just is. */
@@ -51,11 +63,6 @@ import crack.ext._cairo cairo_surface_t;
       CAIROSDL_GMASK =      65280,
       CAIROSDL_BMASK =          0;
 
-   class cairo_surface_t;
-   class SDL_Surface;
-   class SDL_Rect;
-   class cairo_t;
-
    /* All cairo and cairosdl functions expect the underlying SDL_Surface
     * to be locked or not need locking.  The underlying condition is that
     * the ->pixels member of the SDL_Surface should be valid and not
@@ -68,6 +75,10 @@ import crack.ext._cairo cairo_surface_t;
     * returns a surface in CAIRO_STATUS_INVALID_FORMAT error state. */
    cairo_surface_t
       cairosdl_surface_create (SDL_Surface sdl_surface);
+
+   voidptr
+      cairosdl_surface_create_void (voidptr sdl_surface);
+
 
    /* Returns the SDL_Surface bound to the image surface. */
    SDL_Surface 
