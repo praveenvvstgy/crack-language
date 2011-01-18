@@ -15,6 +15,7 @@
 
    @inject '#include <cairo-features.h>\n'
    @inject '#include <X11/Xlib.h>\n'
+   @inject 'cairo_t *cairo_create_void (void *target){return cairo_create((cairo_surface_t *) target);}\n'
    @crack_internal
 
    // Features
@@ -322,6 +323,9 @@
 
    // cairo_t
    cairo_t cairo_create (cairo_surface_t target);
+
+   // FIXME: workaround for type checking
+   cairo_t cairo_create_void (voidptr target);
    cairo_t cairo_reference (cairo_t cr);
    void cairo_destroy (cairo_t cr);
    uint cairo_get_reference_count (cairo_t cr);

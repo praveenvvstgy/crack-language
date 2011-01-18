@@ -54,6 +54,7 @@
                                  );
 
     class SDL_Event;
+    class SDL_Rect;
 
     SDL_Event SDL_EventNew();
     int SDL_Event_GetType(SDL_Event event);

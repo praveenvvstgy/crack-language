@@ -32,6 +32,9 @@ void crack_ext__sdl_init(crack::ext::Module *mod) {
     crack::ext::Type *type_SDL_MouseMotionEvent = mod->addType("SDL_MouseMotionEvent");
     type_SDL_MouseMotionEvent->finish();
 
+    crack::ext::Type *type_SDL_Rect = mod->addType("SDL_Rect");
+    type_SDL_Rect->finish();
+
     crack::ext::Type *type_SDL_Surface = mod->addType("SDL_Surface");
     type_SDL_Surface->finish();
 
