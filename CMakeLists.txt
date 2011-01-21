@@ -234,4 +234,18 @@ IF (PKG_CONFIG_FOUND)
                              ${CAIRO_LDFLAGS} 
                             )
    endif()
+
+   if(CAIRO_FOUND AND SDL_FOUND)
+      add_library(cairosdl SHARED opt/_cairosdl.cc opt/cairosdl.c opt/cairosdl.h)
+      set_target_properties(cairosdl
+                         PROPERTIES
+                         OUTPUT_NAME _cairosdl
+                         PREFIX ""
+                         LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
+                         )
+      target_link_libraries( cairosdl
+                             ${CAIRO_LDFLAGS} ${SDL_LIBRARY}
+                            )
+   endif()
+
 endif()
