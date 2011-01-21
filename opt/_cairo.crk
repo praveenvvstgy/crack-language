@@ -6,6 +6,7 @@
 
 @generateExtension crack.ext._cairo {
    @filename 'opt/_cairo.cc'
+   @dumpsymbols 'opt/_cairo.txt'
    @inject '#include <cairo.h>\n'
    @inject '#include <cairo-pdf.h>\n'
    @inject '#include <cairo-ps.h>\n'
@@ -14,6 +15,7 @@
 
    @inject '#include <cairo-features.h>\n'
    @inject '#include <X11/Xlib.h>\n'
+   @inject 'cairo_t *cairo_create_void (void *target){return cairo_create((cairo_surface_t *) target);}\n'
    @crack_internal
 
    // Features
@@ -269,7 +271,11 @@
    class cairo_t;
    class cairo_surface_t;
    class cairo_device_t;
+   
+   // Matrix
+   @inject 'cairo_matrix_t *cairo_matrix_new() { return new cairo_matrix_t; }\n'
    class cairo_matrix_t;
+   cairo_matrix_t cairo_matrix_new();
    class cairo_pattern_t;
    
    // Rectangle
@@ -277,6 +283,7 @@
    class cairo_rectangle_t{
       float64 x, y, width, height;
    }
+   cairo_rectangle_t cairo_rectangle_new();
 
    // Rectangle list
    @inject 'cairo_rectangle_list_t *cairo_rectangle_list_new() { return new cairo_rectangle_list_t; }\n'
@@ -316,6 +323,9 @@
 
    // cairo_t
    cairo_t cairo_create (cairo_surface_t target);
+
+   // FIXME: workaround for type checking
+   cairo_t cairo_create_void (voidptr target);
    cairo_t cairo_reference (cairo_t cr);
    void cairo_destroy (cairo_t cr);
    uint cairo_get_reference_count (cairo_t cr);
@@ -691,12 +701,16 @@
    uint32 cairo_surface_status (cairo_surface_t surface);
    uint32 cairo_surface_get_type (cairo_surface_t surface);
    uint32 cairo_surface_get_content (cairo_surface_t surface);
+
+@ifdef CAIRO_HAS_PNG_FUNCTIONS {
+   class myClass;
    uint32 cairo_surface_write_to_png (cairo_surface_t surface,
                                       byteptr filename);
 
    uint32 cairo_surface_write_to_png_stream (cairo_surface_t surface,
                                              voidptr         write_func,
                                              voidptr         closure);
+}
 
    voidptr cairo_surface_get_user_data (cairo_surface_t surface,
                                         cairo_user_data_key_t key);
@@ -771,7 +785,10 @@
    int cairo_image_surface_get_width (cairo_surface_t surface);
    int cairo_image_surface_get_height (cairo_surface_t surface);
    int cairo_image_surface_get_stride (cairo_surface_t surface);
+
+@ifdef CAIRO_HAS_PNG_FUNCTIONS {
    cairo_surface_t cairo_image_surface_create_from_png (byteptr filename);
+}
 
    //~ cairo_surface_t 
       //~ cairo_image_surface_create_from_png_stream (cairo_read_func_t  read_func,
