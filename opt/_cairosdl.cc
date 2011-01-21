@@ -1,6 +1,4 @@
 #include "opt/cairosdl.h"
-#include "opt/_cairo.h"
-#include "opt/_sdl.h"
 void *cairosdl_surface_create_void (void *sdl_surface){ 
    return cairosdl_surface_create((SDL_Surface *)sdl_surface);
 }
