@@ -147,7 +147,14 @@
             binder;
             __size = __size + 1;
         }
-    
+
+        Elem pop() {
+           if (__size>0)
+              return __rep[--__size];
+           else
+              return null;
+        }
+
         ArrayIter iter() {
             return ArrayIter(this);
         }

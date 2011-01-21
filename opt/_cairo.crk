@@ -701,12 +701,16 @@
    uint32 cairo_surface_status (cairo_surface_t surface);
    uint32 cairo_surface_get_type (cairo_surface_t surface);
    uint32 cairo_surface_get_content (cairo_surface_t surface);
+
+@ifdef CAIRO_HAS_PNG_FUNCTIONS {
+   class myClass;
    uint32 cairo_surface_write_to_png (cairo_surface_t surface,
                                       byteptr filename);
 
    uint32 cairo_surface_write_to_png_stream (cairo_surface_t surface,
                                              voidptr         write_func,
                                              voidptr         closure);
+}
 
    voidptr cairo_surface_get_user_data (cairo_surface_t surface,
                                         cairo_user_data_key_t key);
@@ -781,7 +785,10 @@
    int cairo_image_surface_get_width (cairo_surface_t surface);
    int cairo_image_surface_get_height (cairo_surface_t surface);
    int cairo_image_surface_get_stride (cairo_surface_t surface);
+
+@ifdef CAIRO_HAS_PNG_FUNCTIONS {
    cairo_surface_t cairo_image_surface_create_from_png (byteptr filename);
+}
 
    //~ cairo_surface_t 
       //~ cairo_image_surface_create_from_png_stream (cairo_read_func_t  read_func,
