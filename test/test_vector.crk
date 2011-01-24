@@ -1,0 +1,25 @@
+# Copyright 2010 Conrad Steenberg
+# Test generic vector class
+
+import crack.io cout;
+import crack.lang free, die;
+@import crack.vector GenericVector, GenericPrimVector, _getter, NumericVector;
+
+class myClass{
+   int __count;
+   oper init(int count):__count=count {}
+   @_getter(int, getCount, __count)
+}
+
+@NumericVector(int)
+V:=intNumericVector(10);
+cout `count=$(V.count())\n`;
+V.setSize(10);
+cout `count=$(V.count())\n`;
+V[null]=-1;
+
+for (i :in V)
+  cout `$(V[i]), `;
+
+cout `\n`;
+
