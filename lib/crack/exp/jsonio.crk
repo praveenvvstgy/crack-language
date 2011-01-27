@@ -1,0 +1,27 @@
+// Conrad Steenberg <conrad.steenberg@gmail.com>
+// Jan 26 2011
+
+// Implement JSON serialization/deserialization as a Formatter
+// Adapted from crack.io.Formatter
+
+@import crack.exp.ann interface, implements;
+import crack.exp.error err;
+import crack.lang die, Writer;
+import crack.io _format, Formatter;
+
+@interface JsonFormatting {
+   void formatJson(Object out) {
+      err.do()
+         `JsonFormatting.formatJson() not implemented in $(this.class.name)\n`;
+   }
+}
+
+// Formatter base class - got a format() method for anything.
+class JsonFormatter : Formatter {
+    
+   oper init(Writer rep0) : Formatter(rep0) {}
+
+   void format(JsonFormatting val) {
+      val.formatJson(this);
+   }
+}

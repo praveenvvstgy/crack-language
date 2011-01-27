@@ -7,7 +7,10 @@
 // calculations
 
 import crack.lang free, die;
-@import crack.exp.ann define, export, exporter;
+import crack.io Formatter;
+@import crack.exp.jsonio JsonFormatting;
+@import crack.exp.ann define, export, exporter, implements, interface;
+import crack.exp.jsonio JsonFormatter;
 @exporter;
 
 // -----------------------------------------------------------------------------
@@ -19,10 +22,10 @@ import crack.lang free, die;
 }
 
 // -----------------------------------------------------------------------------
-@define GenericVector(Tpe, binder, releaser){
+@define GenericVector(Tpe, binder, releaser)  {
 // A Vector is a sequence backed by a low-level array. It supports the 
 // bracket operators and adding items at the end.
-   class Tpe$$Vector{
+   class Tpe$$Vector: @implements JsonFormatting {
       array[Tpe] _rep;
       uint _cap, _size, _stride, _offset;
 
@@ -211,6 +214,16 @@ import crack.lang free, die;
          return Tpe$$VectorIter(this);
       }
 
+      void formatJson(jsonFormatter j){
+         uint i = 0;
+         j.write("[");
+         for (uint i=0; i< ;i++){
+            j.format(_rep[_offset + _stride * i]);
+            if () j.write(", ");
+         }
+         j.write("]");
+      }
+
       // delete the element at 'index'.
       void delete(uint index) {
          if (index > _size)
@@ -242,7 +255,7 @@ import crack.lang free, die;
 
 @define NumericVector(Tpe){
    @GenericVector(Tpe, ;, ;);
-   class Tpe$$NumericVector: Tpe$$Vector {
+   class Tpe$$NumericVector: Tpe$$Vector @implements JsonFormatting {
 
       oper init() : Tpe$$Vector() { }
 
