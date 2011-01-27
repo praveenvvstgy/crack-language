@@ -1,0 +1,15 @@
+// An empty snippet, use an example for other snippets
+
+import crack.math PI, sqrt;
+import crack.lang CString;
+import snippetBase snippetClass;
+import crack.ext._cairo cairo_t, cairo_surface_t;
+
+class emptyClass:snippetClass{
+   oper init(){
+      name="empty";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+   }
+}

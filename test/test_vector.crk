@@ -1,0 +1,30 @@
+// Copyright 2010 Conrad Steenberg
+// Test generic vector class
+
+import crack.io cout, FDWriter;
+import crack.lang free, die;
+@import crack.vector GenericVector, GenericPrimVector, _getter, NumericVector;
+import crack.exp.jsonio JsonFormatter;
+
+class myClass{
+   int __count;
+   oper init(int count):__count=count {}
+   @_getter(int, getCount, __count)
+}
+
+@NumericVector(int)
+V:=intNumericVector(10);
+cout `count=$(V.count())\n`;
+V.setSize(10);
+cout `count=$(V.count())\n`;
+V[null]=-1;
+
+cout `[ `;
+for (i :in V){
+  cout `$(V[i])`;
+  if (i<V.count()-1) cout `, `;
+}
+
+cout `\n`;
+
+j:=JsonFormatter(FDWriter(1));
