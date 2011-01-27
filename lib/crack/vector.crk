@@ -1,0 +1,362 @@
+// Vector template class based on Array class
+// Conrad Steenberg
+//
+// Taken from Array class implementation
+// Vectors are more generic and and implement higher dimensional matrices
+// It's also slower because it contains a stride that is used in index
+// calculations
+
+import crack.lang free, die;
+import crack.io Formatter;
+@import crack.exp.jsonio JsonFormatting;
+@import crack.exp.ann define, export, exporter, implements, interface;
+import crack.exp.jsonio JsonFormatter;
+@exporter;
+
+// -----------------------------------------------------------------------------
+// Getter macro
+@define _getter(Tpe, Name, Member){
+   Tpe Name() {
+      return Member;
+   }
+}
+
+// -----------------------------------------------------------------------------
+@define GenericVector(Tpe, binder, releaser)  {
+// A Vector is a sequence backed by a low-level array. It supports the 
+// bracket operators and adding items at the end.
+   class Tpe$$Vector: @implements JsonFormatting {
+      array[Tpe] _rep;
+      uint _cap, _size, _stride, _offset;
+
+      oper init() : 
+         _rep = array[Tpe](16), 
+         _cap = 16,
+         _size = 0,
+         _offset = 0,
+         _stride = 1 { }
+
+      oper init(uint initCapacity) :
+         _rep = array[Tpe](initCapacity), 
+         _cap = initCapacity,
+         _size = 0,
+         _offset = 0,
+         _stride = 1 { }
+
+      oper init(uint initCapacity, uint stride) :
+         _rep = array[Tpe](initCapacity * stride), 
+         _cap = initCapacity,
+         _size = 0,
+         _offset = 0,
+         _stride = stride { }
+
+      oper init(uint initCapacity, uint stride, uint offset) :
+         _rep = array[Tpe](initCapacity * stride), 
+         _cap = initCapacity,
+         _size = 0,
+         _offset = offset,
+         _stride = stride { }
+     
+      @_getter(uint, count, _size)
+      @_getter(uint, capacity, _cap)
+      @_getter(uint, offset, _offset)
+      @_getter(uint, stride, _stride)
+
+      oper del() {
+         uint i;
+         if (_cap>0 && _rep[0]){
+            while (i < _size * _stride) {
+               elem:=_rep[i];
+               releaser;
+               i = i + 1;
+            }
+            free(_rep);
+         }
+      }
+
+      void realloc(uint newCapacity) {
+         if (newCapacity < _cap)
+            die('Array.realloc() - decreasing capacity');
+           
+         newRep := array[Tpe](newCapacity * _stride);
+       
+      // move all of the entries to the new array.
+         uint i;
+         while (i < _size * _stride) {
+            newRep[i] = _rep[i];
+            i = i + 1;
+         }
+
+         free(_rep);
+         _rep = newRep;
+         _cap = newCapacity;
+      }
+
+      void setSize(uint newSize){
+         if (newSize>_size)
+            realloc(newSize);
+         _size = newSize;
+      }
+
+      void append(Tpe elem) {
+         if (_size == _cap)
+           realloc(_cap * 2);
+       
+         _rep[_offset + _size * _stride] = elem;
+         binder;
+         _size = _size + 1;
+      }
+
+      void swap(uint index1, uint index2) {
+         if (index1 > _size || index2 > _size)
+            die('Index out of range in Vector.swap');
+         if (index1 == index2)
+            return;
+         tmp := _rep[index2];
+         _rep[_offset + _stride * index2] = _rep[_offset + _stride * index1];
+         _rep[_offset + _stride * index1] = tmp;
+      }
+
+      bool _isConformant(Tpe$$Vector vector){
+         return vector.count()==_size;
+      }
+
+      Tpe oper [](uint index) {
+         if (index > _size) // TODO throw exception
+            die('Index out of range in Vector.oper []');
+         return _rep[_offset + _stride * index];
+      }
+
+      Tpe oper [](int index) {
+         uint i;
+         if (index < 0)
+             i = _size + uint(index);
+         else
+             i = uint(index);
+
+         return this[i];
+      }
+
+
+      void oper []=(uint index, Tpe elem) {
+         aindex:=_offset + index * _stride;
+         if (index > _size)
+            die('Index out of range in Vector.oper []=');
+         
+            tmp := _rep[aindex];
+            _rep[aindex] = elem;
+            binder;
+            elem = tmp;
+            releaser;
+      }
+
+      void oper []=(int index, Tpe elem) {
+         uint i;
+         if (index < 0)
+             i = _size + uint(index);
+         else
+             i = uint(index);
+
+         this[i] = elem;
+      }
+
+      uint set(Tpe elem){
+         uint i=_offset;
+         while (i < _size){
+            _rep[i]=elem;
+            i+=_stride;
+         }
+         return _size;
+      }
+
+      void oper []=(voidptr index, Tpe elem){
+         set(elem);
+      }
+
+      class Tpe$$VectorIter {
+         Tpe$$Vector __arr;
+         uint __index;
+         bool __first = true;
+     
+         oper init(Tpe$$Vector arr) : __arr = arr {
+            __index=arr.offset();
+         }
+         
+         Tpe elem() {
+             return __arr[__index];
+         }
+         
+         bool next() {
+             cnt := __arr.count();
+             if (__index < cnt) {
+                 __index = __index + __arr.stride();
+                 return __index < cnt;
+             } else {
+                 return false;
+             }
+         }
+     
+         bool nx() {
+             if (__first) {
+                 __first = false;
+                 return __index < __arr.count();
+             } else {
+                 return next();
+             }
+         }
+         
+         bool isTrue() {
+             return __index < __arr.count();
+         }
+      }
+
+      Tpe$$VectorIter iter() {
+         return Tpe$$VectorIter(this);
+      }
+
+      void formatJson(jsonFormatter j){
+         uint i = 0;
+         j.write("[");
+         for (uint i=0; i< ;i++){
+            j.format(_rep[_offset + _stride * i]);
+            if () j.write(", ");
+         }
+         j.write("]");
+      }
+
+      // delete the element at 'index'.
+      void delete(uint index) {
+         if (index > _size)
+            die('Index out of range in $$Tpe$$Vector.delete()');
+
+         // release the Tpe at the index
+         if (_cap>0){
+            elem:=_rep[_offset + index * _stride];
+            releaser;
+         }
+
+         // move everything else down one
+         uint i = _offset + index * _stride;
+         while (i < _size - 1) {
+            _rep[i] = _rep[i + 1];
+            i += _stride;
+         }
+         --_size;
+      }
+   }
+}
+
+@export _getter
+@export GenericVector
+
+@define GenericPrimVector(Tpe){
+   @GenericVector(Tpe, ;, ;);
+}
+
+@define NumericVector(Tpe){
+   @GenericVector(Tpe, ;, ;);
+   class Tpe$$NumericVector: Tpe$$Vector @implements JsonFormatting {
+
+      oper init() : Tpe$$Vector() { }
+
+      oper init(uint initCapacity0) : Tpe$$Vector(initCapacity0) {}
+
+      oper init(uint initCapacity0, uint stride0) :
+         Tpe$$Vector(initCapacity0, stride0) {}
+
+      oper init(uint initCapacity0, uint stride0, uint offset0) :
+         Tpe$$Vector(initCapacity0, stride0, offset0) { }
+
+      // Subtract a scalar from every element
+      void oper -=(Tpe value){
+         uint i=_offset;
+         while (i < _size){
+            _rep[i] = _rep[i] - value;
+            i+=_stride;
+         }
+      }
+
+      // Subtract another vector
+      void oper -=(Tpe$$NumericVector vector){
+         if (_isConformant(vector)){ // TODO don't just fail silently here
+            uint i=_offset, j=vector.offset(), vstride=vector.stride();
+            while (i < _size){
+               _rep[i] = _rep[i] - vector[j];
+               i+=_stride;
+               j+=vstride;
+            }
+         }
+      }
+
+      // Add scalar to every element
+      void oper +=(Tpe value){
+         uint i=_offset;
+         while (i < _size){
+            _rep[i] = _rep[i] + value;
+            i+=_stride;
+         }
+      }
+
+      // Add another vector
+      void oper +=(Tpe$$NumericVector vector){
+         if (_isConformant(vector)){
+            uint i=_offset, j=vector.offset(), vstride=vector.stride();
+            while (i < _size){
+               _rep[i] = _rep[i] + vector[j];
+               i+=_stride;
+               j+=vstride;
+            }
+         }
+      }
+
+      // Multiply elements by scalar
+      void oper *=(Tpe value){
+         uint i=_offset;
+         while (i < _size){
+            _rep[i] = _rep[i] * value;
+            i+=_stride;
+         }
+      }
+
+      // Multiply by another vector
+      void oper *=(Tpe$$NumericVector vector){
+         if (_isConformant(vector)){
+            uint i=_offset, j=vector.offset(), vstride=vector.stride();
+            while (i < _size){
+               _rep[i] = _rep[i] * vector[j];
+               i+=_stride;
+               j+=vstride;
+            }
+         }
+      }
+
+      // Divide elements by scalar
+      void oper /=(Tpe value){
+         uint i=_offset;
+         while (i < _size){
+            _rep[i] = _rep[i] / value;
+            i+=_stride;
+         }
+      }
+
+      // Divide by another vector
+      void oper /=(Tpe$$NumericVector vector){
+         if (_isConformant(vector)){
+            uint i=_offset, j=vector.offset(), vstride=vector.stride();
+            while (i < _size){
+               _rep[i] = _rep[i] / vector[j];
+               i+=_stride;
+               j+=vstride;
+            }
+         }
+      }
+   }
+}
+
+@define GenericObjVector(Tpe){
+   @GenericVector(Tpe, elem.oper bind(), elem.oper release())
+}
+
+@export GenericPrimVector
+@export GenericObjVector
+@export NumericVector
