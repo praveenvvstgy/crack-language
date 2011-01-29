@@ -10,12 +10,13 @@
 
 @import crack.exp.ann define, export, exporter;
 @exporter;
+import crack.exp.jsonio JsonFormatter, JsonFormatting;
 
 @define GenericArray(Name, Elem, binder, releaser) {
 
     ## An Array is a sequence backed by a low-level array.  It supports the 
     ## bracket operators and adding items at the end.
-    class Name {
+    class Name: Object @implements JsonFormatting{
         
         array[Elem] __rep = null;
         uint __cap, __size;
@@ -163,6 +164,16 @@
             return __cap;
         }
         
+        void formatJson(Formatter jf){
+            jf.write("[");
+            i:=0;
+            for (item :in this) {
+                if (i++>0) jf.write(", ");
+                jf.format(item);
+            }
+            jf.write("]");
+        }
+
         ## delete the element at 'index'.
         void delete(uint index) {
             if (index > __size)

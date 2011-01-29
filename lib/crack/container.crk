@@ -56,6 +56,17 @@ class Container {
             out `, $(i.elem())`;
         out `]`;
     }
+
+    void formatJson(Formatter jf){
+        jf.write("[");
+        i:=0;
+        for (item :in this) {
+            if (i++>0) jf.write(", ");
+            jf.format(item);
+        }
+        jf.write("]");
+    }
+
 }
 
 # classes to support linked lists.

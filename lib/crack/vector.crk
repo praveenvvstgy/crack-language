@@ -10,7 +10,7 @@ import crack.lang free, die;
 import crack.io Formatter;
 @import crack.exp.jsonio JsonFormatting;
 @import crack.exp.ann define, export, exporter, implements, interface;
-import crack.exp.jsonio JsonFormatter;
+import crack.exp.jsonio JsonFormatter, JsonFormatting;
 @exporter;
 
 // -----------------------------------------------------------------------------
@@ -25,7 +25,7 @@ import crack.exp.jsonio JsonFormatter;
 @define GenericVector(Tpe, binder, releaser)  {
 // A Vector is a sequence backed by a low-level array. It supports the 
 // bracket operators and adding items at the end.
-   class Tpe$$Vector: @implements JsonFormatting {
+   class Tpe$$Vector: Object @implements JsonFormatting {
       array[Tpe] _rep;
       uint _cap, _size, _stride, _offset;
 
@@ -214,12 +214,11 @@ import crack.exp.jsonio JsonFormatter;
          return Tpe$$VectorIter(this);
       }
 
-      void formatJson(jsonFormatter j){
-         uint i = 0;
+      void formatJson(Formatter j){
          j.write("[");
-         for (uint i=0; i< ;i++){
+         for (uint i=0; i< _size; i++){
+            if (i>0) j.write(", ");
             j.format(_rep[_offset + _stride * i]);
-            if () j.write(", ");
          }
          j.write("]");
       }
@@ -255,7 +254,8 @@ import crack.exp.jsonio JsonFormatter;
 
 @define NumericVector(Tpe){
    @GenericVector(Tpe, ;, ;);
-   class Tpe$$NumericVector: Tpe$$Vector @implements JsonFormatting {
+   
+   class Tpe$$NumericVector: Tpe$$Vector{
 
       oper init() : Tpe$$Vector() { }
 
@@ -267,89 +267,47 @@ import crack.exp.jsonio JsonFormatter;
       oper init(uint initCapacity0, uint stride0, uint offset0) :
          Tpe$$Vector(initCapacity0, stride0, offset0) { }
 
-      // Subtract a scalar from every element
-      void oper -=(Tpe value){
-         uint i=_offset;
-         while (i < _size){
-            _rep[i] = _rep[i] - value;
-            i+=_stride;
-         }
-      }
-
-      // Subtract another vector
-      void oper -=(Tpe$$NumericVector vector){
-         if (_isConformant(vector)){ // TODO don't just fail silently here
-            uint i=_offset, j=vector.offset(), vstride=vector.stride();
+      // Apply scalar operator to all elements
+      @define ScalarOper(Tpe, op){
+         Tpe$$NumericVector oper op(Tpe value){
+            uint i=_offset;
             while (i < _size){
-               _rep[i] = _rep[i] - vector[j];
+               _rep[i] = _rep[i] op value;
                i+=_stride;
-               j+=vstride;
             }
+            return this;
          }
       }
 
-      // Add scalar to every element
-      void oper +=(Tpe value){
-         uint i=_offset;
-         while (i < _size){
-            _rep[i] = _rep[i] + value;
-            i+=_stride;
-         }
-      }
-
-      // Add another vector
-      void oper +=(Tpe$$NumericVector vector){
-         if (_isConformant(vector)){
-            uint i=_offset, j=vector.offset(), vstride=vector.stride();
-            while (i < _size){
-               _rep[i] = _rep[i] + vector[j];
-               i+=_stride;
-               j+=vstride;
+      // Apply vector operator
+      @define VectorOper(Tpe, op){
+         Tpe$$NumericVector oper op(Tpe$$NumericVector vector){
+            if (_isConformant(vector)){ // TODO don't just fail silently here
+               uint i=_offset, j=vector.offset(), vstride=vector.stride();
+               while (i < _size){
+                  _rep[i] = _rep[i] op vector[j];
+                  i+=_stride;
+                  j+=vstride;
+               }
             }
+
+            return this;
          }
       }
 
-      // Multiply elements by scalar
-      void oper *=(Tpe value){
-         uint i=_offset;
-         while (i < _size){
-            _rep[i] = _rep[i] * value;
-            i+=_stride;
-         }
-      }
+      @VectorOper(Tpe, -)
 
-      // Multiply by another vector
-      void oper *=(Tpe$$NumericVector vector){
-         if (_isConformant(vector)){
-            uint i=_offset, j=vector.offset(), vstride=vector.stride();
-            while (i < _size){
-               _rep[i] = _rep[i] * vector[j];
-               i+=_stride;
-               j+=vstride;
-            }
-         }
-      }
+      @ScalarOper(Tpe, +)
+      @VectorOper(Tpe, +)
 
-      // Divide elements by scalar
-      void oper /=(Tpe value){
-         uint i=_offset;
-         while (i < _size){
-            _rep[i] = _rep[i] / value;
-            i+=_stride;
-         }
-      }
+      @ScalarOper(Tpe, *)
+      @VectorOper(Tpe, *)
 
-      // Divide by another vector
-      void oper /=(Tpe$$NumericVector vector){
-         if (_isConformant(vector)){
-            uint i=_offset, j=vector.offset(), vstride=vector.stride();
-            while (i < _size){
-               _rep[i] = _rep[i] / vector[j];
-               i+=_stride;
-               j+=vstride;
-            }
-         }
-      }
+      @ScalarOper(Tpe, /)
+      @VectorOper(Tpe, /)
+
+      // @ScalarOper(Tpe, -) // This fails, why?
+
    }
 }
 
