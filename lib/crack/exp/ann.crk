@@ -14,7 +14,7 @@
 
 import crack.lang die, CString;
 import crack.exp.error err;
-import crack.io cout, StringFormatter, StringWriter, Formatter, Reader, Writer;
+import crack.io cout, StringFormatter, StringWriter, Formatter, Reader, Writer, Buffer;
 import crack.compiler CrackContext, Token, Location, TOK_COMMA, TOK_STRING, 
     TOK_POPERRCTX;
 import crack.container Array, TreeMap;
@@ -681,6 +681,7 @@ void export(CrackContext ctx) {
             mac.expand(ctx);
         }
     \n\0`;
+
     ctx.inject(f.buffer, l, code.createString().buffer);
 }
 
@@ -692,8 +693,8 @@ void exporter(CrackContext ctx) {
         Stringify, Concat;
        import crack.compiler CrackContext, Token, TOK_STRING;
        import crack.io StringReader;`;
-    ctx.inject(@FILE.buffer, @LINE, 
-               f.createCString().buffer);
+
+    ctx.inject(@FILE.buffer, @LINE, f.createCString().buffer);
 }
 
 void readIStr(CrackContext ctx, NodeList nodes) {
@@ -760,6 +761,7 @@ void interface(CrackContext ctx) {
         if (!(this is null)) get$(nameTok.getText())Object().oper release(); 
     }
 }\0`;
+
     ctx.inject(loc.getName(), loc.getLineNumber(), f.createString().buffer);
 
     # expand the body and opening bracket
@@ -770,6 +772,7 @@ void interface(CrackContext ctx) {
     loc = nameTok.getLocation();
     f = StringFormatter();
     f `class $(nameTok.getText()) : VTableBase\n\0`;
+
     ctx.inject(loc.getName(), loc.getLineNumber(), f.createString().buffer);
 }
 
@@ -801,9 +804,9 @@ void implements(CrackContext ctx) {
 
     # add a comma to the end of the list (so it will show up at the beginning 
     # of the list when we expand it)
-#~     interfaces.append(
-#~         Tok(Token(TOK_COMMA, ",".buffer, firstTok.getLocation()))
-#~     );
+    interfaces.append(
+        Tok(Token(TOK_COMMA, ",".buffer, firstTok.getLocation()))
+    );
 
     
     # read the body.
