@@ -4,7 +4,7 @@
 // Copyright 2010 Conrad Steenberg
 // Test generic JSON serialization
 
-import crack.io cout, FDWriter, StringWriter;
+import crack.io cout, FDWriter, StringWriter, Writer;
 import crack.lang cmp, free, die;
 @import crack.exp.ann define, export, exporter, implements, interface;
 import crack.io Formatter, StringFormatter;
@@ -19,18 +19,20 @@ errors.append("test");
 
 failed:=false;
 uint l=10;
+uint c=20;
 
 @NumericVector(int)
 V:=intNumericVector(l);
 if (V.count() != 0) errors.append("Initial size of vector is not 0");
 
-V.setSize(10);
-if (V.count() != l) errors.append("Updated size of vector is not 10");
-V[null]=-1;
+V.resize(l);
+if (V.size() != l) errors.append("Updated size of vector is not 10");
+V.set(-1);
 
 for (v :in V)
    if (v != -1) {
       errors.append("Element value is incorrect");
+      cout `v=$v\n`;
       break;
    }
 
@@ -38,8 +40,21 @@ V.append(10);
 
 if (V[-1] != 10 || V[10] != 10) errors.append("Appended element value is incorrect");
 
+V[-1] = V[0];
 V = V + 1;
 V+=-1;
+
+V*=3;
+
+expectedResult:="[-3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3]";
+fmt:=StringFormatter();
+fmt `$V`;
+fmtResult:= fmt.createString();
+
+if (fmtResult != expectedResult){
+   errors.append("Incorrect formatted output:");
+   errors.append(fmtResult);
+}
 
 if (errors.count() == 1)
    cout `ok\n`;
@@ -48,4 +63,3 @@ else {
    i:=0;
    for (e :in errors)  if (i++ > 0) cout `  $e\n`;
 }
- 
