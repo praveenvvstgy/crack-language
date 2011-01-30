@@ -1,7 +1,7 @@
 // Copyright 2010 Conrad Steenberg
 // Test generic JSON serialization
 
-import crack.io cout, FDWriter, StringWriter;
+import crack.io cout, FDWriter, StringWriter, Writer;
 import crack.lang cmp, free, die;
 @import crack.exp.ann define, export, exporter, implements, interface;
 import crack.io Formatter, StringFormatter;
@@ -19,9 +19,9 @@ failed:=false;
 V:=intNumericVector(10);
 if (V.count() !=0) errors.append("Initial size of vector is not 0");
 
-V.setSize(10);
+V.resize(10);
 if (V.count() !=10) errors.append("Updated size of vector is not 10");
-V[null]=-1;
+V.set(-1);
 
 
 sw:=StringWriter();
@@ -49,4 +49,9 @@ for (item :in SM) {
 j.format(SA);
 
 expectedResult:="{[-1, -1, -1, -1, -1, -1, -1, -1, -1, -1]}{{first: 100, second: 200}}{[\"first: 100\", \"second: 200\"]}";
-cout `$(sw.createString())\n`
+result:=sw.createString();
+
+if (result==expectedResult)
+   cout `ok\n`;
+else
+   cout `jsonio got unexpected result:\n$result\n`;
