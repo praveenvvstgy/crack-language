@@ -1143,6 +1143,5 @@ test_output 'serial module' 'import test.test_serial;' ok
 
 test_output 'math module' 'import test.test_math;' ok "" "" noredir
 test_output 'vector module' 'import test.test_vector;' ok "" "" noredir
-test_output 'json module' 'import test.test_jsonio;' ok "" "" noredir
 
 exit $rc

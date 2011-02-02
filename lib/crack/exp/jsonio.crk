@@ -4,7 +4,7 @@
 // Implement JSON serialization/deserialization as a Formatter
 // Adapted from crack.io.Formatter
 
-@import crack.exp.ann export, exporter, interface;
+@import crack.exp.ann export, exporter, interface, implements;
 import crack.exp.error err;
 import crack.lang die, Writer;
 import crack.io _format, Formatter;

@@ -5,7 +5,7 @@ import crack.io cout, FDWriter, StringWriter, Writer;
 import crack.lang cmp, free, die;
 @import crack.exp.ann define, export, exporter, implements, interface;
 import crack.io Formatter, StringFormatter;
-@import crack.vector GenericVector, GenericPrimVector, _getter, NumericVector;
+@import crack.exp.cont.vector GenericVector, GenericPrimVector, _getter, NumericVector;
 import crack.exp.jsonio JsonFormatter, JsonFormatting;
 @import crack.exp.cont.treemap GenericTreeMap;
 @import crack.exp.cont.array GenericObjArray, GenericArray;
@@ -15,8 +15,8 @@ StringArray errors = {};
 
 failed:=false;
 
-@NumericVector(int)
-V:=intNumericVector(10);
+@GenericVector(int, ;, ;)
+V:=intVector(10);
 if (V.count() !=0) errors.append("Initial size of vector is not 0");
 
 V.resize(10);

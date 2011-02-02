@@ -8,9 +8,7 @@
 
 import crack.lang free, die;
 import crack.io Formatter, Writer;
-@import crack.exp.jsonio JsonFormatting;
 @import crack.exp.ann define, export, exporter, implements, interface;
-import crack.exp.jsonio JsonFormatter, JsonFormatting;
 @exporter;
 
 // -----------------------------------------------------------------------------
@@ -72,7 +70,7 @@ import crack.exp.jsonio JsonFormatter, JsonFormatting;
 
 // A Vector is a sequence backed by a low-level array. It supports the 
 // bracket operators and adding items at the end.
-   class Tpe$$Vector: Object @implements JsonFormatting {
+   class Tpe$$Vector {
       Tpe$$Block _block;
       uint _size, _stride; // _size is in units of _stride
       uint _offset;        // _offset is in units of elements, not _stride
@@ -306,12 +304,6 @@ import crack.exp.jsonio JsonFormatter, JsonFormatting;
          return Tpe$$VectorIter(this);
       }
 
-      void writeTo(Writer out) {
-         fmt:=Formatter(out);
-         formatJson(fmt); // Text output is actually the same as JSON
-      }
-         
-         
       void formatJson(Formatter j){
          j.write("[");
          for (uint i=0; i< _size; i++){
@@ -319,6 +311,11 @@ import crack.exp.jsonio JsonFormatter, JsonFormatting;
             j.format(_block.rep[_offset + _stride * i]);
          }
          j.write("]");
+      }
+
+      void writeTo(Writer out) {
+         fmt:=Formatter(out);
+         formatJson(fmt); // Text output is actually the same as JSON
       }
 
       // Set size to 0

@@ -8,12 +8,16 @@ import crack.io cout, FDWriter, StringWriter, Writer;
 import crack.lang cmp, free, die;
 @import crack.exp.ann define, export, exporter, implements, interface;
 import crack.io Formatter, StringFormatter;
-@import crack.vector GenericVector, GenericPrimVector, _getter, NumericVector;
+@import crack.exp.cont.vector GenericVector, GenericPrimVector, _getter;
 import crack.exp.jsonio JsonFormatter, JsonFormatting;
 @import crack.exp.cont.treemap GenericTreeMap;
 @import crack.exp.cont.array GenericObjArray, GenericArray;
 
+// Instantiate 2 class types
 @GenericObjArray(StringArray, String);
+@GenericVector(int, ;, ;)
+
+// Error map
 StringArray errors = {};
 errors.append("test");
 
@@ -21,7 +25,8 @@ failed:=false;
 uint l=10;
 uint c=20;
 
-@GenericVector(int, ;, ;)
+
+// Initialize vector with l element capacity
 V:=intVector(l);
 if (V.count() != 0) errors.append("Initial size of vector is not 0");
 
@@ -36,7 +41,7 @@ for (v :in V)
       break;
    }
 
-// append
+// Append method
 V.append(10);
 
 if (V[-1] != 10 || V[10] != 10) errors.append("Appended element value is incorrect");
