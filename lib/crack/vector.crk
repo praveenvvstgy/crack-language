@@ -352,6 +352,54 @@ import crack.exp.jsonio JsonFormatter, JsonFormatting;
          }
          --_size;
       }
+      
+      // Add all elements and return the value
+      Tpe add(){
+         Tpe result = 0;
+         for (i:=0; i<_size; i++)
+            result+=_block.rep[i];
+         return result;
+      }
+
+      // Apply scalar operator to all elements
+      @define ScalarOper(Tpe, op){
+         Tpe$$Vector oper op(Tpe value){
+            uint i=_offset;
+            while (i < _size){
+               _block.rep[i] = _block.rep[i] op value;
+               i+=_stride;
+            }
+            return this;
+         }
+      }
+
+      // Apply vector operator
+      @define VectorOper(Tpe, op){
+         Tpe$$Vector oper op(Tpe$$Vector vector){
+            if (_isConformant(vector)){ // TODO don't just fail silently here
+               uint i=_offset, j=vector.offset(), vstride=vector.stride();
+               while (i < _size){
+                  _block.rep[i] = _block.rep[i] op vector[j];
+                  i+=_stride;
+                  j+=vstride;
+               }
+            }
+
+            return this;
+         }
+      }
+
+      @VectorOper(Tpe, -)
+
+      @ScalarOper(Tpe, +)
+      @VectorOper(Tpe, +)
+
+      @ScalarOper(Tpe, *)
+      @VectorOper(Tpe, *)
+
+      @ScalarOper(Tpe, /)
+      @VectorOper(Tpe, /)
+      
    }
 }
 

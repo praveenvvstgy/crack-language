@@ -21,8 +21,8 @@ failed:=false;
 uint l=10;
 uint c=20;
 
-@NumericVector(int)
-V:=intNumericVector(l);
+@GenericVector(int, ;, ;)
+V:=intVector(l);
 if (V.count() != 0) errors.append("Initial size of vector is not 0");
 
 V.resize(l);
@@ -36,14 +36,19 @@ for (v :in V)
       break;
    }
 
+// append
 V.append(10);
 
 if (V[-1] != 10 || V[10] != 10) errors.append("Appended element value is incorrect");
 
+// Assignment/negative indexing
 V[-1] = V[0];
+
+// Two forms of addition
 V = V + 1;
 V+=-1;
 
+// Scalar multiply method
 V*=3;
 
 expectedResult:="[-3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3]";
@@ -51,10 +56,21 @@ fmt:=StringFormatter();
 fmt `$V`;
 fmtResult:= fmt.createString();
 
+
 if (fmtResult != expectedResult){
    errors.append("Incorrect formatted output:");
    errors.append(fmtResult);
 }
+ // .add() method
+ 
+result:=V.add();
+
+if (result != -33) {
+   fmt = StringFormatter();
+   fmt `"add method failed: expected -33, got $result"`;
+   errors.append(fmt.createString());
+}
+
 
 if (errors.count() == 1)
    cout `ok\n`;
