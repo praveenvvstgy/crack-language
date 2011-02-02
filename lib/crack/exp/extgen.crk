@@ -54,7 +54,7 @@ class Type {
 }
 
 // to be inserted in the typemap
-class ifdefType : Type {
+class IfdefType : Type {
    bool _open;
    String _test;
 
@@ -88,7 +88,7 @@ class ifdefType : Type {
     }
 }
 
-class ifdefPreamble : Type {
+class IfdefPreamble : Type {
    
    oper init(String name0, String emitted0) : Type(name0, emitted0) {}
    
@@ -150,9 +150,9 @@ class Func {
         }
 }
 
-class ifdefFunc: Func{
+class IfdefFunc: Func{
    oper init(bool open, String test0, String name0): 
-      Func(ifdefType(open, test0, name0), name0) {
+      Func(IfdefType(open, test0, name0), name0) {
    }
 
    void emitInitializer(Formatter out){
@@ -378,9 +378,9 @@ class Const {
         }
 }
 
-class ifdefConst:Const{
+class IfdefConst:Const{
    oper init(bool open, String test0, String ident0):
-      Const(ifdefType(open, test0, ident0), ident0){
+      Const(IfdefType(open, test0, ident0), ident0){
    }
    void emitInitializer(Formatter out) {
       type.emitInitializer(out);
@@ -616,11 +616,11 @@ class ExtensionData {
     }
     
     void _populateIfdefs(bool open, String ifdefTest,  String ifdefCond){
-        funcs.append(ifdefFunc(open, ifdefTest, ifdefCond));
-        consts.append(ifdefConst(open, ifdefTest, ifdefCond));
-        types[ifdefCond]=ifdefType(open, ifdefTest, ifdefCond);
+        funcs.append(IfdefFunc(open, ifdefTest, ifdefCond));
+        consts.append(IfdefConst(open, IfdefTest, ifdefCond));
+        types[IfdefCond]=IfdefType(open, IfdefTest, ifdefCond);
         typeNames.append(ifdefCond);
-        preamble.append(ifdefType(open, ifdefTest, ifdefCond));
+        preamble.append(IfdefType(open, IfdefTest, ifdefCond));
     }
 
     void _closeIfdef(){
@@ -874,21 +874,20 @@ void $(join(module, '_'))_init(crack::ext::Module *mod) {
 
     void emitSymbols(Writer out) {
         o := Formatter(out);
-        uint i=0;
+        uint i=0, l=0;
 
-        rx := Regex('array');
-        Match m;
         o `// Types\n`;
         for (kv :in types){
-            m = rx.search(kv.key);
-            if (m && m.begin() == 0 && m.end() == 5) {
-               continue;
+            if (kv.val.class.isSubclass(ArrayType)) {
+                continue;
             }
 
             if (!kv.val.isBuiltIn()){
-               if (i>0) o `, `;
-               o `$(kv.key)`;
-               i++;
+                if (i>0) { o `, `; l+=2;}
+                if (l>72) { o `\n`; l=0;}
+                o `$(kv.key)`;
+                l+=kv.key.size;
+                i++;
             }
          }
          if (i==0) cout `(None)`;
@@ -896,24 +895,39 @@ void $(join(module, '_'))_init(crack::ext::Module *mod) {
         o `\n\n// Functions\n`;
         i=0;
         for (func :in funcs) {
-            if (i>0) o `, `;
-            o `$(func.name)`;
+            if (i>0) o `,\n`;
+            if (i>0 && i%10==0) o `\n`;
+            
+            retTypeRepr := func.retType.emit();
+            o `$(retTypeRepr) $(func.name)(`;
+
+            j:=0;
+            for (arg :in func.args){
+               if (j>0) o `, `;
+               o `$(arg.type.emit())`;
+               j++;
+            }
+
+            o `)`;
             i++;
         }
-        if (i==0) cout `(None)`;
 
         o `\n\n// Constants\n`;
         i=0;
+        l=0;
         for (c :in consts) {
-            if (i>0) o `, `;
+            if (i>0) { o `, `; l+=2;}
+            if (l>72) { o `\n`; l=0;}
+
             o `$(c.ident)`;
+            l+=c.ident.size;
             i++;
         }
         if (i==0) cout `(None)`;
     }
 
 
-    void symbols() {
+    void writeSymbols() {
         # write all symbols to file
         cout `writing symbols to $symbolFilename\n`;
         out := Formatter(File(symbolFilename, 'w'));
@@ -931,5 +945,5 @@ void generateExtension(CrackContext ctx) {
         ext.emit();
 
     if (ext.symbolFilename)
-        ext.symbols();
+        ext.writeSymbols();
 }

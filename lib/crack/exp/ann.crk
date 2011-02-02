@@ -489,9 +489,6 @@ ST_CONCAT := 2;  # got a double-dollar-sign concatenation operator
 ST_ISTR := 3; # MUST BE THE HIGHEST VALUE STATE.  Values greater than this 
               # indicate levels of nested parens in an i-string.
 
-void implements(CrackContext ctx);
-void interface(CrackContext ctx);
-
 void define(CrackContext ctx) {
     Macro mac = {};
     TreeMap args = {};
@@ -804,7 +801,7 @@ void implements(CrackContext ctx) {
 
     # add a comma to the end of the list (so it will show up at the beginning 
     # of the list when we expand it)
-    interfaces.append(
+    interfaces.pushHead(
         Tok(Token(TOK_COMMA, ",".buffer, firstTok.getLocation()))
     );
 

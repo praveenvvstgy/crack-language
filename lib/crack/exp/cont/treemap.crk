@@ -4,14 +4,13 @@
 # import crack.io cout, Formatter;'
 
 @import crack.exp.ann define, export, exporter;
-import crack.exp.jsonio JsonFormatter, JsonFormatting;
 @exporter;
 
 // TODO: add ordered map, look at BPS "a B-tree with a twist pointer set"
 
 @define GenericTreeMap(Name, KeyT, ValT) {
 
-    class Name: Object @implements JsonFormatting {
+    class Name {
 
         ## Red-black tree node.
         class Node {
@@ -605,22 +604,6 @@ import crack.exp.jsonio JsonFormatter, JsonFormatting;
         uint count() { return __count; }
         
         Iter iter() { return Iter(__root); }
-
-        void formatJson(Formatter jf){
-            jf.write("{");
-            i:=0;
-            for (item :in this) {
-                if (i>0) jf.write(", ");
-
-                StringFormatter fmt = {};
-                fmt `$(item.key): `;
-                jf.write(fmt.createString());
-                jf.format(item.val);
-                i++;
-            }
-            jf.write("}");
-        }
-
     }
 } # @define GenericTreeMap
 
