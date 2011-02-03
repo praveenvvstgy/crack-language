@@ -9,7 +9,6 @@ import crack.lang cmp, free, die;
 @import crack.exp.ann define, export, exporter, implements, interface;
 import crack.io Formatter, StringFormatter;
 @import crack.exp.cont.vector GenericVector, GenericPrimVector, _getter;
-import crack.exp.jsonio JsonFormatter, JsonFormatting;
 @import crack.exp.cont.treemap GenericTreeMap;
 @import crack.exp.cont.array GenericObjArray, GenericArray;
 
