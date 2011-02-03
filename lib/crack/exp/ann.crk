@@ -801,7 +801,7 @@ void implements(CrackContext ctx) {
 
     # add a comma to the end of the list (so it will show up at the beginning 
     # of the list when we expand it)
-    interfaces.pushHead(
+    interfaces.append(
         Tok(Token(TOK_COMMA, ",".buffer, firstTok.getLocation()))
     );
 
