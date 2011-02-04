@@ -267,6 +267,7 @@ namespace {
                                 ) {
         BTypeDefPtr btype = new BTypeDef(context.construct->classType.get(),
                                          name,
+                                         context.construct,
                                          llvmType
                                          );
         btype->defaultInitializer =
@@ -287,6 +288,7 @@ namespace {
                              ) {
         BTypeDefPtr btype = new BTypeDef(context.construct->classType.get(),
                                          name,
+                                         context.construct,
                                          llvmType
                                          );
         btype->defaultInitializer =
@@ -427,6 +429,7 @@ TypeDef *LLVMBuilder::getFuncType(Context &context,
     // nope.  create a new type object and store it
     BTypeDefPtr crkFuncType = new BTypeDef(context.construct->classType.get(),
                                            "",
+                                           context.construct,
                                            llvmFuncType
                                            );
     funcTypes[llvmFuncType] = crkFuncType;
@@ -877,6 +880,7 @@ BTypeDefPtr LLVMBuilder::createClass(Context &context, const string &name,
 
     const Type *opaque = OpaqueType::get(getGlobalContext());
     type = new BTypeDef(metaType.get(), name,
+                        context.construct,
                         PointerType::getUnqual(opaque),
                         true,
                         nextVTableSlot
@@ -1023,7 +1027,9 @@ FuncDefPtr LLVMBuilder::createExternFunc(Context &context,
                                          ) {
     ContextPtr funcCtx = 
         context.createSubContext(Context::local, new 
-                                 LocalNamespace(context.ns.get(), name)
+                                 LocalNamespace(context.ns.get(), name,
+                                                context.construct
+                                                )
                                  );
     FuncBuilder f(*funcCtx, flags, BTypeDefPtr::cast(returnType),
                   name,
@@ -1053,7 +1059,9 @@ namespace {
 
         // build a local context to hold the "this"
         Context localCtx(context.builder, Context::local, &context,
-                         new LocalNamespace(objClass, objClass->name),
+                         new LocalNamespace(objClass, objClass->name,
+                                            context.construct
+                                            ),
                          context.compileNS.get()
                          );
         localCtx.ns->addDef(new ArgDef(objClass, "this"));
@@ -1470,7 +1478,9 @@ ModuleDefPtr LLVMBuilder::createModule(Context &context,
     }
 
     // possibly bind to execution engine
-    BModuleDef *moduleDef = new BModuleDef(name, context.ns.get());
+    BModuleDef *moduleDef = new BModuleDef(name, context.ns.get(), 
+                                           context.construct
+                                           );
     engineBindModule(moduleDef);
 
     return moduleDef;
@@ -1659,7 +1669,9 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     assert(!context.getParent()->getParent() && "parent context must be root");
     assert(!module);
 
-    BModuleDef *bMod = new BModuleDef(".builtin", context.ns.get());
+    BModuleDef *bMod = new BModuleDef(".builtin", context.ns.get(), 
+                                      context.construct
+                                      );
 
     Construct *gd = context.construct;
     LLVMContext &lctx = getGlobalContext();
@@ -1671,7 +1683,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     BTypeDef *classType;
     Type *classTypeRep = OpaqueType::get(lctx);
     Type *classTypePtrRep = PointerType::getUnqual(classTypeRep);
-    gd->classType = classType = new BTypeDef(0, "Class", classTypePtrRep);
+    gd->classType = classType = new BTypeDef(0, "Class", gd, classTypePtrRep);
     classType->type = classType;
     classType->meta = classType;
     context.ns->addDef(classType);
@@ -1682,6 +1694,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     BTypeDef *voidType;
     gd->voidType = voidType = new BTypeDef(context.construct->classType.get(), 
                                            "void",
+                                           gd,
                                            Type::getVoidTy(lctx)
                                            );
     context.ns->addDef(voidType);
@@ -1691,6 +1704,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
         PointerType::getUnqual(OpaqueType::get(getGlobalContext()));
     gd->voidptrType = voidptrType = new BTypeDef(context.construct->classType.get(), 
                                                  "voidptr",
+                                                 gd,
                                                  llvmVoidPtrType
                                                  );
     context.ns->addDef(voidptrType);
@@ -1700,6 +1714,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     BTypeDef *byteptrType;
     gd->byteptrType = byteptrType = new BTypeDef(context.construct->classType.get(), 
                                                  "byteptr",
+                                                 gd,
                                                  llvmBytePtrType
                                                  );
     byteptrType->defaultInitializer = createStrConst(context, "");
@@ -1719,6 +1734,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     BTypeDef *boolType;
     gd->boolType = boolType = new BTypeDef(context.construct->classType.get(), 
                                            "bool",
+                                           gd,
                                            llvmBoolType
                                            );
     gd->boolType->defaultInitializer = new BIntConst(boolType, (int64_t)0);
@@ -1982,6 +1998,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     // create the array generic
     TypeDefPtr arrayType = new ArrayTypeDef(context.construct->classType.get(),
                                             "array", 
+                                            context.construct,
                                             0
                                             );
     context.ns->addDef(arrayType.get());
@@ -2005,7 +2022,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
 
     // create OverloadDef's type
     metaType = createMetaClass(context, "Overload");
-    BTypeDefPtr overloadDef = new BTypeDef(metaType.get(), "Overload", 0);
+    BTypeDefPtr overloadDef = new BTypeDef(metaType.get(), "Overload", gd, 0);
     metaType->meta = overloadDef.get();
     createClassImpl(context, overloadDef.get());
         
@@ -2013,7 +2030,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     overloadDef->addDef(
         new VoidPtrOpDef(context.construct->voidptrType.get())
     );
-    OverloadDef::overloadType = gd->overloadType = overloadDef;
+    gd->overloadType = overloadDef;
     
     // create an empty structure type and its pointer for VTableBase 
     // Actual type is {}** (another layer of pointer indirection) because 
@@ -2025,6 +2042,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     BTypeDef *vtableBaseType;
     gd->vtableBaseType = vtableBaseType =
         new BTypeDef(metaType.get(), "VTableBase",
+                     gd,
                      PointerType::getUnqual(vtablePtrType),
                      true
                      );

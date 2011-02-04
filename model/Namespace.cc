@@ -2,6 +2,7 @@
 #include "Namespace.h"
 
 #include "Expr.h"
+#include "Construct.h"
 #include "OverloadDef.h"
 #include "VarDef.h"
 
@@ -25,7 +26,7 @@ OverloadDefPtr Namespace::getOverload(const std::string &varName) {
         return overloads;
 
     overloads = new OverloadDef(varName);
-    overloads->type = OverloadDef::overloadType;
+    overloads->type = construct->overloadType;
     
     // merge in the overloads from the parents
     

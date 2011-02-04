@@ -51,12 +51,6 @@ class OverloadDef : public VarDef {
 
     public:
 
-        // XXX this is a terrible hack that breaks re-entrancy of the 
-        // executor.  We need to store the overload class object so that we 
-        // can generated it from a Namespace without having to pass the 
-        // Context through all lookup funcs.
-        static TypeDefPtr overloadType;
-
         OverloadDef(const std::string &name) :
             // XXX need function types, but they'll probably be assigned after 
             // the fact.
@@ -97,6 +91,12 @@ class OverloadDef : public VarDef {
          * defined.
          */
         FuncDef *getNoArgMatch(bool acceptAlias);
+        
+        /**
+         * Returns the only function in this overload.  There must be exactly 
+         * one function in the overload for this to work.
+         */
+        FuncDef *getOnlyFunc();
         
         /** 
          * Returns true if the overload includeds a signature for the 

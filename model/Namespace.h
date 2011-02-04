@@ -10,6 +10,7 @@
 
 namespace model {
 
+class Construct;
 class Context;
 SPUG_RCPTR(Expr);
 SPUG_RCPTR(FuncDef);
@@ -45,11 +46,14 @@ class Namespace : public virtual spug::RCBase {
         virtual void storeDef(VarDef *def);
 
     public:
-        
-        Namespace(const std::string &cName) :
-                canonicalName(cName)
-        {
 
+        // making this public only so that derived classes can get it from 
+        // other instances.
+        Construct *construct;
+        
+        Namespace(const std::string &cName, Construct *construct) :
+            canonicalName(cName),
+            construct(construct) {
         }
 
         /**

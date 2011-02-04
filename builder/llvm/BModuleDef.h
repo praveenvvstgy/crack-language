@@ -22,9 +22,11 @@ public:
     // primitive cleanup function
     void (*cleanup)();
 
-    BModuleDef(const std::string &canonicalName, model::Namespace *parent) :
-            ModuleDef(canonicalName, parent),
-            cleanup(0) {
+    BModuleDef(const std::string &canonicalName, model::Namespace *parent,
+               model::Construct *construct
+               ) :
+        ModuleDef(canonicalName, parent, construct),
+        cleanup(0) {
     }
 
     void callDestructor() {

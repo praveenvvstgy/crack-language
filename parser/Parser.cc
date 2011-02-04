@@ -212,9 +212,7 @@ void Parser::parseAnnotation() {
    
       // if we get an import keyword, parse the import statement.   
       if (tok.isImport()) {
-         OverloadDef::overloadType = context->construct->overloadType;
          parseImportStmt(parentContext->compileNS.get());
-         OverloadDef::overloadType = context->parent->construct->overloadType;
          return;
       }
       
@@ -418,8 +416,8 @@ ExprPtr Parser::createVarRef(Expr *container, const Token &ident) {
                          )
                );
       
-      // make sure that the implementation has been defined
-      ovld->createImpl();
+      // swap the overload with the single function
+      var = ovld->getOnlyFunc();
    }
 
    return createVarRef(container, var.get(), ident);

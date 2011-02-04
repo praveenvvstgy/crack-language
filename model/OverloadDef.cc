@@ -60,8 +60,6 @@ void OverloadDef::flatten(OverloadDef::FuncList &flatFuncs) const {
     }
 }
 
-TypeDefPtr OverloadDef::overloadType;
-
 FuncDef *OverloadDef::getMatch(Context &context, vector<ExprPtr> &args,
                                FuncDef::Convert convertFlag
                                ) {
@@ -166,6 +164,15 @@ FuncDef *OverloadDef::getNoArgMatch(bool acceptAlias) {
     }
     
     return 0;
+}
+
+FuncDef *OverloadDef::getOnlyFunc() {
+    FuncList flatFuncs;
+    flatten(flatFuncs);
+    assert(flatFuncs.size() == 1 && 
+           "getOnlyFunc() called on overload with multiple matches."
+           );
+    return flatFuncs.front().get();
 }
 
 void OverloadDef::addFunc(FuncDef *func) {

@@ -121,8 +121,8 @@ void Construct::addToSourceLibPath(const string &path) {
 ContextPtr Construct::createRootContext() {
 
     rootContext = new Context(*rootBuilder, Context::module, this,
-                              new GlobalNamespace(0, ""),
-                              new GlobalNamespace(0, "")
+                              new GlobalNamespace(0, "", this),
+                              new GlobalNamespace(0, "", this)
                               );
 
     // register the primitives into our builtin module
@@ -131,8 +131,8 @@ ContextPtr Construct::createRootContext() {
                     // NOTE we can't have rootContext namespace be the parent
                     // here since we are adding the aliases into rootContext
                     // and we get dependency issues
-                    new GlobalNamespace(0, ".builtin"),
-                    new GlobalNamespace(0, ".builtin"));
+                    new GlobalNamespace(0, ".builtin", this),
+                    new GlobalNamespace(0, ".builtin", this));
     builtinMod = rootBuilder->registerPrimFuncs(*builtinContext);
 
     // alias builtins to the root namespace
@@ -188,7 +188,9 @@ ModuleDefPtr Construct::initExtensionModule(const string &canonicalName,
     BuilderPtr builder = rootBuilder->createChildBuilder();
     ContextPtr context =
         new Context(*builder, Context::module, rootContext.get(),
-                    new GlobalNamespace(rootContext->ns.get(), canonicalName),
+                    new GlobalNamespace(rootContext->ns.get(), canonicalName,
+                                        this
+                                        ),
                     0 // we don't need a compile namespace
                     );
     context->toplevel = true;
@@ -293,10 +295,12 @@ ModuleDefPtr Construct::loadModule(Construct::StringVecIter moduleNameBegin,
         ContextPtr context =
             new Context(*builder, Context::module, rootContext.get(),
                         new GlobalNamespace(rootContext->ns.get(), 
-                                            canonicalName
+                                            canonicalName,
+                                            this
                                             ),
                         new GlobalNamespace(rootContext->compileNS.get(),
-                                            canonicalName
+                                            canonicalName,
+                                            this
                                             )
                         );
         context->toplevel = true;
@@ -388,8 +392,12 @@ int Construct::runScript(istream &src, const string &name) {
     BuilderPtr builder = rootBuilder->createChildBuilder();
     ContextPtr context =
         new Context(*builder, Context::module, rootContext.get(),
-                    new GlobalNamespace(rootContext->ns.get(), name),
-                    new GlobalNamespace(rootContext->compileNS.get(), name)
+                    new GlobalNamespace(rootContext->ns.get(), name,
+                                        this
+                                        ),
+                    new GlobalNamespace(rootContext->compileNS.get(), name,
+                                        this
+                                        )
                     );
     context->toplevel = true;
 

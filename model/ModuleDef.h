@@ -27,7 +27,9 @@ class ModuleDef : public VarDef, public Namespace {
         // close() method has been called.
         bool finished;
 
-        ModuleDef(const std::string &name, Namespace *parent);
+        ModuleDef(const std::string &name, Namespace *parent,
+                  Construct *construct
+                  );
 
         /**
          * Close the module, executing it.
