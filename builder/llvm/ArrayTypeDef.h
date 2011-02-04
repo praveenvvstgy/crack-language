@@ -19,6 +19,7 @@ class ArrayTypeDef : public BTypeDef {
 public:
     ArrayTypeDef(model::TypeDef *metaType,
                  const std::string &name,
+                 model::Construct *construct,
                  const llvm::Type *rep
                  );
 

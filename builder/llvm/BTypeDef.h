@@ -36,11 +36,12 @@ public:
     llvm::PATypeHolder firstVTableType;
 
     BTypeDef(TypeDef *metaType, const std::string &name,
+             model::Construct *construct,
              const llvm::Type *rep,
              bool pointer = false,
              unsigned nextVTableSlot = 0
              ) :
-        model::TypeDef(metaType, name, pointer),
+        model::TypeDef(metaType, name, construct, pointer),
         fieldCount(0),
         rep(rep),
         nextVTableSlot(nextVTableSlot),

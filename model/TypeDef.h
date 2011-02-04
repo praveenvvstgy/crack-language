@@ -113,10 +113,11 @@ class TypeDef : public VarDef, public Namespace {
         bool gotExplicitOperNew;
         
         TypeDef(TypeDef *metaType, const std::string &name, 
+                Construct *construct,
                 bool pointer = false
                 ) :
             VarDef(metaType, name),
-            Namespace(name),
+            Namespace(name, construct),
             generic(0),
             pointer(pointer),
             hasVTable(false),

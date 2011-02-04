@@ -13,8 +13,9 @@ using namespace model;
 using namespace builder::mvll;
 
 ArrayTypeDef::ArrayTypeDef(TypeDef *metaType, const std::string &name,
+                           Construct *construct,
                            const Type *rep
-                           ) : BTypeDef(metaType, name, rep) {
+                           ) : BTypeDef(metaType, name, construct, rep) {
 
     defaultInitializer = new NullConst(this);
     generic = new SpecializationCache();
@@ -42,6 +43,7 @@ TypeDef * ArrayTypeDef::getSpecialization(Context &context,
                          SPUG_FSTR(name << "[" << parmType->getFullName() <<
                                    "]"
                                    ),
+                         construct,
                          llvmType
                          );
 

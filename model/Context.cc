@@ -88,10 +88,10 @@ ContextPtr Context::createSubContext(Scope newScope, Namespace *ns) {
     if (!ns) {
         switch (newScope) {
             case local:
-                ns = new LocalNamespace(this->ns.get(), "");
+                ns = new LocalNamespace(this->ns.get(), "", construct);
                 break;
             case module:
-                ns = new GlobalNamespace(this->ns.get(), "");
+                ns = new GlobalNamespace(this->ns.get(), "", construct);
                 break;
             case composite:
             case instance:

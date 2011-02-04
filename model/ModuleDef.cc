@@ -7,9 +7,11 @@
 
 using namespace model;
 
-ModuleDef::ModuleDef(const std::string &name, Namespace *parent) :
+ModuleDef::ModuleDef(const std::string &name, Namespace *parent,
+                     Construct *construct
+                     ) :
     VarDef(0, name),
-    Namespace(name),
+    Namespace(name, construct),
     parent(parent),
     finished(false) {
 }

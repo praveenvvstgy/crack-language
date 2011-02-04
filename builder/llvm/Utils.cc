@@ -195,6 +195,7 @@ BTypeDefPtr createMetaClass(Context &context, const string &name) {
     BTypeDefPtr metaType =
         new BTypeDef(context.construct->classType.get(),
                      SPUG_FSTR("Class[" << name << "]"),
+                     context.construct,
                      0,
                      true,
                      0
