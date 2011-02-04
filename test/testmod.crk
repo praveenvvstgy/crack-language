@@ -1,0 +1,27 @@
+# test module
+# this is for execution with bootstrapping disabled (byteptr's are expected 
+# rather than Strings)
+# Copyright 2010 Google Inc.
+
+puts('testmod');
+
+# a function to import
+void func() {
+    puts('in test func');
+}
+
+# a class to import
+class A {
+    byteptr data;
+
+    oper init(byteptr data0) {
+        data = data0;
+    }
+    
+    void dump() {
+        puts(data);
+    }
+};
+
+# a variable for us to import
+A aImportVar = A('imported var');
