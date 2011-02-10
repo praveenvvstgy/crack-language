@@ -7,6 +7,7 @@
 #include "BTypeDef.h"
 #include "FuncBuilder.h"
 #include "Utils.h"
+#include "Native.h"
 
 #include <llvm/Support/StandardPasses.h>
 #include <llvm/LLVMContext.h>
@@ -20,6 +21,40 @@ using namespace llvm;
 using namespace model;
 using namespace builder;
 using namespace builder::mvll;
+
+
+// emit the final cleanup function, a collection of calls
+// to the cleanup functions for the individual modules we have
+// included in this build
+// by convention, the name is "main:cleanup". this is used by Native.cc
+Function *LLVMLinkerBuilder::emitAggregateCleanup(Module *module) {
+
+    assert(!rootBuilder && "emitAggregateCleanup must be called from "
+                           "root builder");
+
+    LLVMContext &lctx = getGlobalContext();
+    llvm::Constant *c =
+            module->getOrInsertFunction("main:cleanup",
+                                        Type::getVoidTy(lctx), NULL);
+    Function *func = llvm::cast<llvm::Function>(c);
+    func->setCallingConv(llvm::CallingConv::C);
+    BasicBlock *block = BasicBlock::Create(lctx, "", func);
+
+    for (vector<ModuleDef *>::const_iterator i =
+             moduleList->begin();
+         i != moduleList->end();
+         ++i) {
+         Function *dfunc = module->getFunction((*i)->name+":cleanup");
+         // missing a cleanup function isn't an error, because the moduleDef
+         // list currently includes modules that don't have any associated
+         // codegen, like "crack"
+         if (!dfunc)
+             continue;
+         CallInst::Create(dfunc, "", block);
+    }
+    ReturnInst::Create(lctx, block);
+    return func;
+}
 
 Linker *LLVMLinkerBuilder::linkModule(Module *mod) {
     if (linker) {
@@ -40,6 +75,8 @@ Linker *LLVMLinkerBuilder::linkModule(Module *mod) {
                                 getGlobalContext(),
                                 Linker::Verbose // flags
                                 );
+            assert(linker && "unable to create Linker");
+            linkModule(mod);
         }
     }
 
@@ -69,7 +106,7 @@ void *LLVMLinkerBuilder::getFuncAddr(llvm::Function *func) {
     assert("LLVMLinkerBuilder::getFuncAddr called");
 }
 
-void LLVMLinkerBuilder::run() {
+void LLVMLinkerBuilder::finish(Context &context) {
 
     assert(!rootBuilder && "run must be called from root builder");
 
@@ -77,17 +114,30 @@ void LLVMLinkerBuilder::run() {
     Module *finalir = linker->getModule();
 
     // LTO optimizations
-    if (optimizeLevel) {
+    if (options->optimizeLevel) {
         PassManager passMan;
         createStandardLTOPasses(&passMan,
                                 true, // internalize
                                 true, // inline
-                                debugMode // verify each
+                                options->debugMode // verify each
                                 );
         passMan.run(*finalir);
     }
 
-    //nativeCompile(finalir, options);
+    emitAggregateCleanup(finalir);
+
+    if (options->dumpMode) {
+        PassManager passMan;
+        passMan.add(llvm::createPrintModulePass(&llvm::outs()));
+        passMan.run(*finalir);
+        return;
+    }
+
+    nativeCompile(finalir,
+                  options.get(),
+                  sharedLibs,
+                  context.construct->sourceLibPath
+                  );
 
 }
 
@@ -95,8 +145,7 @@ BuilderPtr LLVMLinkerBuilder::createChildBuilder() {
     LLVMLinkerBuilder *result = new LLVMLinkerBuilder();
     result->rootBuilder = rootBuilder ? rootBuilder : this;
     result->llvmVoidPtrType = llvmVoidPtrType;
-    result->dumpMode = dumpMode;
-    result->debugMode = debugMode;
+    result->options = options;
     return result;
 }
 
@@ -107,7 +156,7 @@ ModuleDefPtr LLVMLinkerBuilder::createModule(Context &context,
     LLVMContext &lctx = getGlobalContext();
     module = new llvm::Module(name, lctx);
 
-    if (debugMode) {
+    if (options->debugMode) {
         debugInfo = new DebugInfo(module, name);
     }
 
@@ -281,3 +330,11 @@ void LLVMLinkerBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
 
 }
 
+void LLVMLinkerBuilder::loadSharedLibrary(const string &name,
+                                    const vector<string> &symbols,
+                                    Context &context,
+                                    Namespace *ns
+                                    ) {
+    sharedLibs.push_back(name);
+    LLVMBuilder::loadSharedLibrary(name, symbols, context, ns);
+}

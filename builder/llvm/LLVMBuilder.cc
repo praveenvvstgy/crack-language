@@ -32,8 +32,6 @@
 #include <llvm/LLVMContext.h>
 #include <llvm/PassManager.h>
 #include <llvm/CallingConv.h>
-#include <llvm/Analysis/Verifier.h>
-#include <llvm/Assembly/PrintModulePass.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <spug/Exception.h>
@@ -466,8 +464,6 @@ BHeapVarDefImplPtr LLVMBuilder::createLocalVar(BTypeDef *tp, Value *&var,
 
 LLVMBuilder::LLVMBuilder() :
     debugInfo(0),
-    dumpMode(false),
-    debugMode(false),
     module(0),
     builder(getGlobalContext()),
     func(0),
@@ -1990,12 +1986,6 @@ void LLVMBuilder::setArgv(int newArgc, char **newArgv) {
     argv = newArgv;
 }
 
-void LLVMBuilder::dump() {
-    PassManager passMan;
-    passMan.add(llvm::createPrintModulePass(&llvm::outs()));
-    passMan.run(*module);
-}
-
 void LLVMBuilder::emitMemVarRef(Context &context, Value *val) {
     lastValue = builder.CreateLoad(val);
 }
@@ -2012,12 +2002,4 @@ void LLVMBuilder::emitVTableInit(Context &context, TypeDef *typeDef) {
         new IncompleteVTableInit(btype, lastValue, vtableBaseType, block);
     // store it
     btype->addPlaceholder(vtableInit);
-}
-
-void LLVMBuilder::setDumpMode(bool dump) {
-    dumpMode = dump;
-}
-
-void LLVMBuilder::setDebug(bool debug) {
-    debugMode = debug;
 }
