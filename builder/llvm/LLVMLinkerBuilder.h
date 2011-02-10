@@ -23,27 +23,40 @@ class LLVMLinkerBuilder : public LLVMBuilder {
         llvm::Linker *linker;
         moduleListType *moduleList;
         llvm::BasicBlock *mainInsert;
+        std::vector<std::string> sharedLibs;
 
         llvm::Linker *linkModule(llvm::Module *mp);
         moduleListType *addModule(model::ModuleDef *mp);
 
+        llvm::Function *emitAggregateCleanup(llvm::Module *module);
+
     public:
         LLVMLinkerBuilder(void) : linker(0),
                                   moduleList(0),
-                                  mainInsert(0) { }
+                                  mainInsert(0),
+                                  sharedLibs() { }
 
         virtual void *getFuncAddr(llvm::Function *func);
 
-        virtual void run();
+        virtual void finish(model::Context &context);
 
         virtual BuilderPtr createChildBuilder();
 
         virtual model::ModuleDefPtr createModule(model::Context &context,
                                                  const std::string &name
                                                  );
+
+        virtual void loadSharedLibrary(const std::string &name,
+                                       const std::vector<std::string> &symbols,
+                                       model::Context &context,
+                                       model::Namespace *ns
+                                       );
+
         virtual void closeModule(model::Context &context,
                                  model::ModuleDef *module
                                  );
+
+        virtual bool isExec() { return false; }
 
 };
 

@@ -55,8 +55,6 @@ class LLVMBuilder : public Builder {
         typedef std::map<model::VarDefImpl *, llvm::GlobalVariable *> ModVarMap;
         ModVarMap moduleVars;
 
-        bool dumpMode, debugMode;
-
         LLVMBuilderPtr rootBuilder;
 
         void initializeMethodInfo(model::Context &context, 
@@ -82,13 +80,13 @@ class LLVMBuilder : public Builder {
          * possibly bind the module to an execution engine. this is run
          * immediately after the module is created in createModule
          */
-        virtual void engineBindModule(model::ModuleDef *moduleDef) { };
+        virtual void engineBindModule(model::ModuleDef *moduleDef) { }
 
         /**
          * let the engine "finish" a module before running/linking/dumping
          * this is run immediately after closeModule and before run() or dump()
          */
-        virtual void engineFinishModule(model::ModuleDef *moduleDef) { };
+        virtual void engineFinishModule(model::ModuleDef *moduleDef) { }
 
     public:
         // currently experimenting with making these public to give objects in 
@@ -324,8 +322,6 @@ class LLVMBuilder : public Builder {
                                     );
 
         virtual void setArgv(int argc, char **argv);        
-        virtual void run() = 0;
-        virtual void dump();
         
         // internal functions used by our VarDefImpl to generate the 
         // appropriate variable references.
@@ -338,9 +334,6 @@ class LLVMBuilder : public Builder {
                                     model::TypeDef *typeDef
                                     );
 
-        virtual void setDumpMode(bool dump);
-        
-        virtual void setDebug(bool debug);
 };
 
 } // namespace builder::mvll
