@@ -1,0 +1,106 @@
+// Classes for directory traversal
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+// Portions Copyright 2010 Google Inc.
+
+import crack.io cerr, Formatter, Writer;
+import crack.lang die, FreeBase, CString, SubString;
+import crack.exp.bindings Opaque;
+import crack.container List, Iterator;
+import crack.exp.file Openable, FileInfo;
+
+import crack.runtime opendir, closedir, readdir, getDirEntry, Dir, DirEntry;
+
+// must match Dir.h defines
+int __CRACK_DTYPE_DIR   = 1;
+int __CRACK_DTYPE_FILE  = 2;
+int __CRACK_DTYPE_OTHER = 3;
+
+// XXX make portable
+String PATH_SEPARATOR = "/";
+
+class Directory : Object, Openable {
+
+    String name;
+
+    Dir _dir;
+
+    List _dirList = {};
+    List _fileList = {};
+
+    oper init(String name0, bool open): name(name0) {
+        // possibly strip trailing delim
+        if (name.rfind(PATH_SEPARATOR[0]) == (name.size-1))
+            name = SubString(name, 0, name.size-1);
+        if (open)
+            _open();
+    }
+
+    oper init(String name0): name(name0) {
+        // possibly strip trailing delim
+        if (name.rfind(PATH_SEPARATOR[0]) == (name.size-1))
+            name = SubString(name, 0, name.size-1);
+        // default open
+        _open();
+    }
+
+    void _open() {
+
+        cn := CString(name);
+        _dir = opendir(cn.buffer);
+        _isValid = !(_dir is null);
+        _isOpened = true;
+
+        if (!_isValid)
+            return;
+
+        DirEntry d = getDirEntry(_dir);
+        // note, this should be done lazily so we don't have to load
+        // an entire directory structure on open
+        StaticString n;
+        while (readdir(_dir)) {
+            if (d.type == __CRACK_DTYPE_DIR) {
+                n = StaticString(d.name);
+                if (n != '.' && n != '..')
+                    _dirList.append(Directory(name+PATH_SEPARATOR+n));
+            }
+            else {
+                _fileList.append(FileInfo(name+PATH_SEPARATOR+d.name));
+            }
+        }
+
+    }
+
+    oper del() {
+        if (_isValid)
+            closedir(_dir);
+    }
+
+    String nameWithTrailing() {
+        return name+PATH_SEPARATOR;
+    }
+
+    /// Returns an iterator over the subdirectories (Iter[Directory]).
+    Iterator dirIter() { 
+        if (!_isOpened)
+            _open();
+        if (_isValid)
+            return _dirList.iter(); 
+        else
+            return null;
+    }
+
+    Iterator fileInfoIter() {
+        if (!_isOpened)
+            _open();
+        if (_isValid)
+            return _fileList.iter(); 
+        else
+            return null;        
+    }
+    
+    void writeTo(Writer out) {
+        Formatter(out) `$name`;
+    }
+    
+}
+
