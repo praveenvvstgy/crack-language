@@ -376,7 +376,7 @@ Function *LLVMBuilder::getModFunc(FuncDef *funcDef) {
         if (!func)
           func = Function::Create(bfuncDef->rep->getFunctionType(),
                                   Function::ExternalLinkage,
-                                  bfuncDef->getFullName(),
+                                  bfuncDef->rep->getName(),
                                   module
                                   );
 
@@ -541,7 +541,8 @@ ResultExprPtr LLVMBuilder::emitStrConst(Context &context, StrConst *val) {
                                                   true, // is constant
                                                   GlobalValue::InternalLinkage,
                                                   llvmVal,
-                                                  "",
+                                                 "str:"+
+                                                  module->getModuleIdentifier(),
                                                   0,
                                                   false);
         
@@ -1389,7 +1390,7 @@ VarDefPtr LLVMBuilder::emitVarDef(Context &context, TypeDef *type,
                                    // provided or the global will be 
                                    // treated as an extern.
                                    Constant::getNullValue(tp->rep),
-                                   name
+                                   module->getModuleIdentifier()+":"+name
                                    );
             varDefImpl = new BGlobalVarDefImpl(gvar);
             break;
@@ -1955,15 +1956,20 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
 
 }
 
-void LLVMBuilder::loadSharedLibrary(const string &name,
-                                    const vector<string> &symbols,
-                                    Context &context,
-                                    Namespace *ns
-                                    ) {
+void *LLVMBuilder::loadSharedLibrary(const std::string &name) {
     // leak the handle so the library stays mapped for the life of the process.
     void *handle = dlopen(name.c_str(), RTLD_LAZY|RTLD_GLOBAL);
     if (!handle)
         throw spug::Exception(dlerror());
+    return handle;
+}
+
+void LLVMBuilder::importSharedLibrary(const string &name,
+                                    const vector<string> &symbols,
+                                    Context &context,
+                                    Namespace *ns
+                                    ) {
+    void *handle = loadSharedLibrary(name);
     for (vector<string>::const_iterator iter = symbols.begin();
          iter != symbols.end();
          ++iter
