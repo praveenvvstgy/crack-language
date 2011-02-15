@@ -1,0 +1,85 @@
+// Copyright 2010 Conrad Steenberg
+// Test generic vector class
+
+// Copyright 2010 Conrad Steenberg
+// Test generic JSON serialization
+
+import crack.io cout, FDWriter, StringWriter, Writer;
+import crack.lang cmp, free, die;
+@import crack.exp.ann define, export, exporter, implements, interface;
+import crack.io Formatter, StringFormatter;
+@import crack.exp.cont.vector GenericVector, GenericPrimVector, _getter;
+@import crack.exp.cont.treemap GenericTreeMap;
+@import crack.exp.cont.array GenericObjArray, GenericArray;
+
+// Instantiate 2 class types
+@GenericObjArray(StringArray, String);
+@GenericVector(int, ;, ;)
+
+// Error map
+StringArray errors = {};
+errors.append("test");
+
+failed:=false;
+uint l=10;
+uint c=20;
+
+
+// Initialize vector with l element capacity
+V:=intVector(l);
+if (V.count() != 0) errors.append("Initial size of vector is not 0");
+
+V.resize(l);
+if (V.size() != l) errors.append("Updated size of vector is not 10");
+V.set(-1);
+
+for (v :in V)
+   if (v != -1) {
+      errors.append("Element value is incorrect");
+      cout `v=$v\n`;
+      break;
+   }
+
+// Append method
+V.append(10);
+
+if (V[-1] != 10 || V[10] != 10) errors.append("Appended element value is incorrect");
+
+// Assignment/negative indexing
+V[-1] = V[0];
+
+// Two forms of addition
+V = V + 1;
+V+=-1;
+
+// Scalar multiply method
+V*=3;
+
+expectedResult:="[-3, -3, -3, -3, -3, -3, -3, -3, -3, -3, -3]";
+fmt:=StringFormatter();
+fmt `$V`;
+fmtResult:= fmt.createString();
+
+
+if (fmtResult != expectedResult){
+   errors.append("Incorrect formatted output:");
+   errors.append(fmtResult);
+}
+ // .add() method
+ 
+result:=V.add();
+
+if (result != -33) {
+   fmt = StringFormatter();
+   fmt `"add method failed: expected -33, got $result"`;
+   errors.append(fmt.createString());
+}
+
+
+if (errors.count() == 1)
+   cout `ok\n`;
+else {
+   cout `Vector errors found: \n`;
+   i:=0;
+   for (e :in errors)  if (i++ > 0) cout `  $e\n`;
+}

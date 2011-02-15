@@ -1,0 +1,475 @@
+// Vector template class based on Array class
+// Conrad Steenberg
+//
+// Taken from Array class implementation
+// Vectors are more generic and and implement higher dimensional matrices
+// It's also slower because it contains a stride that is used in index
+// calculations
+
+import crack.lang free, die;
+import crack.io Formatter, Writer;
+@import crack.exp.ann define, export, exporter, implements, interface;
+@exporter;
+
+// -----------------------------------------------------------------------------
+// Getter macro
+@define _getter(Tpe, Name, Member){
+   Tpe Name() {
+      return Member;
+   }
+}
+
+// -----------------------------------------------------------------------------
+@define GenericVector(Tpe, binder, releaser)  {
+
+// A Block holds the underlying array for Vectors
+// Each vector holds a reference to the block, so it gets garbage collected
+// when the last reference disappears
+// For now leave cap and rep r/w public, need to make writing to them atomic 
+// in future
+   class Tpe$$Block: Object{
+      array[Tpe] rep;
+      uint cap, maxSize;
+
+      oper init() : 
+         rep = array[Tpe](16), 
+         cap = 16,
+         maxSize = 0
+         { }
+
+      oper init(uint initCapacity) :
+         rep = array[Tpe](initCapacity), 
+         cap = initCapacity,
+         maxSize = 0
+         { }
+
+      void realloc(uint newCapacity) {
+         if (newCapacity < cap)
+            die('Block.realloc() - decreasing capacity!');
+         newRep := array[Tpe](newCapacity);
+       
+         // move all of the entries to the new array.
+         for (i:=0; i< cap; i++) newRep[i] = rep[i];
+
+         free(rep);
+         rep = newRep;
+         cap = newCapacity;
+      }
+
+      oper del() {
+         uint i;
+         if (cap>0 && rep[0]){
+            for (i=0; i<cap;i++) {
+               elem:=rep[i];
+               releaser;
+            }
+            free(rep);
+         }
+      }
+   }
+
+// A Vector is a sequence backed by a low-level array. It supports the 
+// bracket operators and adding items at the end.
+   class Tpe$$Vector {
+      Tpe$$Block _block;
+      uint _size, _stride; // _size is in units of _stride
+      uint _offset;        // _offset is in units of elements, not _stride
+
+      oper init() : 
+         _block = Tpe$$Block(), 
+         _size = 0,
+         _offset = 0,
+         _stride = 1 { }
+
+      oper init(uint initCapacity) :
+         _block = Tpe$$Block(initCapacity),
+         _size = 0,
+         _offset = 0,
+         _stride = 1 { }
+
+      oper init(uint initCapacity, uint stride) :
+         _block = Tpe$$Block(initCapacity * stride),
+         _size = 0,
+         _offset = 0,
+         _stride = stride { }
+
+      oper init(uint initCapacity, uint stride, uint offset) :
+         _block = Tpe$$Block(initCapacity * stride),
+         _size = 0,
+         _offset = offset,
+         _stride = stride { }
+
+      // This is a lowlevel constructor for creating slices
+      oper init(Tpe$$Block block, uint size, uint stride, uint offset) :
+         _block = block, 
+         _size = size,
+         _offset = offset,
+         _stride = stride { }
+
+      @_getter(uint, count, _size);
+      @_getter(uint, size, _size);
+      @_getter(Tpe$$Block, block, _block);
+      @_getter(uint, offset, _offset)
+      @_getter(uint, stride, _stride)
+
+      uint cap(){
+         return _block.cap/_stride;
+      }
+
+      void resize(uint newSize){
+         if (newSize>_size)
+            _block.realloc(newSize * _stride);
+         _size = newSize;
+      }
+
+      uint set(Tpe elem, uint size0){
+         if (size0>0) resize(size0);
+         uint i = _offset;;
+         while (i < _size){
+            _block.rep[i]=elem;
+            i+=_stride;
+         }
+         return _size;
+      }
+
+      uint set(Tpe elem){
+         return set(elem, 0);
+      }
+
+      uint set(Tpe$$Vector V){
+         srcBlock := V.block();
+         srcStride := V.stride();
+
+         resize(V.count()); // changes only size, not capacity
+
+         uint i=0, j=0;
+         while (i < _block.cap && j < srcBlock.cap){
+            _block.rep[i * _stride] = srcBlock.rep[j * srcStride];
+            i += _stride;
+            j += srcStride;
+         }
+
+         return _size;
+      }
+
+      // Copy this vector
+      Tpe$$Vector copy(){
+         newBlock:=Tpe$$Block(_size * _stride);
+         newVector:=Tpe$$Vector(newBlock, _size, _stride, _offset);
+         newVector.set(this);
+         return newVector;
+      }
+
+      // Copy this vector
+      Tpe$$Vector copy(uint start0, uint size0){
+         if (start0 >= start0 || size0 - start0 > _size)
+            die('Invalid vector start or size in Vector.copy(uint, uint)');
+         newBlock:=Tpe$$Block(size0 *_stride);
+         newVector:=Tpe$$Vector(newBlock, size0, _stride, _offset + start0 * _stride);
+         for (i:=_offset; i< newBlock.cap; i++)
+            newBlock.rep[i]=_block.rep[i];
+         return newVector;
+      }
+
+      // Copy this vector
+      Tpe$$Vector copy(uint start0, uint size0, uint stride0){
+         if (start0 >= start0 || size0 - start0 > _size)
+            die('Invalid vector start or size in Vector.copy(uint, uint)');
+         newBlock:=Tpe$$Block(size0 *_stride);
+         newVector:=Tpe$$Vector(newBlock, size0, _stride, _offset + start0 * _stride);
+         for (i:=_offset; i< newBlock.cap; i++) 
+            newBlock.rep[i]=_block.rep[i];
+         return newVector;
+      }
+
+      void append(Tpe elem) {
+         if (_size * _stride >= _block.cap)
+           _block.realloc(_block.cap * 2);
+       
+         _block.rep[_offset + _size * _stride] = elem;
+         binder;
+         _size = _size + 1;
+      }
+      
+      void push(Tpe elem){
+         append(elem);
+      }
+
+      void swap(uint index1, uint index2) {
+         if (index1 > _size || index2 > _size)
+            die('Index out of range in Vector.swap');
+         if (index1 == index2)
+            return;
+         tmp := _block.rep[index2];
+         _block.rep[_offset + _stride * index2] = _block.rep[_offset + _stride * index1];
+         _block.rep[_offset + _stride * index1] = tmp;
+      }
+
+      bool _isConformant(Tpe$$Vector vector){
+         return vector.count()==_size;
+      }
+
+      Tpe oper [](uint index) {
+         if (index > _size) // TODO throw exception
+            die('Index out of range in Vector.oper []');
+         return _block.rep[_offset + _stride * index];
+      }
+
+      Tpe oper [](int index) {
+         uint i;
+         if (index < 0)
+             i = _size + uint(index);
+         else
+             i = uint(index);
+
+         return this[i];
+      }
+
+
+      void oper []=(uint index, Tpe elem) {
+         aindex:=_offset + index * _stride;
+         if (index > _size)
+            die('Index out of range in Vector.oper []=');
+         
+            tmp := _block.rep[aindex];
+            _block.rep[aindex] = elem;
+            binder;
+            elem = tmp;
+            releaser;
+      }
+
+      void oper []=(int index, Tpe elem) {
+         uint i;
+         if (index < 0)
+             i = _size + uint(index);
+         else
+             i = uint(index);
+
+         this[i] = elem;
+      }
+
+      Tpe$$Vector slice(uint start0){
+         if (start0 > _size) return null;
+         return Tpe$$Vector(_block, _size - start0, _stride, _offset + start0 * _stride);
+      }
+
+      Tpe$$Vector slice(uint start0, uint size0){
+         if (size0 > _size || start0 > size0) return null;
+         return Tpe$$Vector(_block, size0, _stride, start0 * _offset);
+      }
+
+      Tpe$$Vector view(){ // A shallow copy: more than just a reference
+         return Tpe$$Vector(_block, _size, _stride, _offset);
+      }
+
+
+      class Tpe$$VectorIter {
+         Tpe$$Vector __arr;
+         uint __index;
+         bool __first = true;
+     
+         oper init(Tpe$$Vector arr) : __arr = arr {
+            __index=arr.offset();
+         }
+         
+         Tpe elem() {
+             return __arr[__index];
+         }
+         
+         bool next() {
+             cnt := __arr.count();
+             if (__index < cnt) {
+                 __index = __index + __arr.stride();
+                 return __index < cnt;
+             } else {
+                 return false;
+             }
+         }
+     
+         bool nx() {
+             if (__first) {
+                 __first = false;
+                 return __index < __arr.count();
+             } else {
+                 return next();
+             }
+         }
+         
+         bool isTrue() {
+             return __index < __arr.count();
+         }
+      }
+
+      Tpe$$VectorIter iter() {
+         return Tpe$$VectorIter(this);
+      }
+
+      void formatJson(Formatter j){
+         j.write("[");
+         for (uint i=0; i< _size; i++){
+            if (i>0) j.write(", ");
+            j.format(_block.rep[_offset + _stride * i]);
+         }
+         j.write("]");
+      }
+
+      void writeTo(Writer out) {
+         fmt:=Formatter(out);
+         formatJson(fmt); // Text output is actually the same as JSON
+      }
+
+      // Set size to 0
+      void reset(){
+         if (_block.cap>0){
+            for (i:=0; i<_size; i++){
+               //Tpe elem = _block.rep[_offset + i * _stride];
+               //releaser;
+            }
+         }
+         _size = 0;
+      }
+
+      // delete the element at 'index'.
+      // If you need to do this, rather use a list
+      void delete(uint index) {
+         if (index > _size)
+            die('Index out of range in $$Tpe$$Vector.delete()');
+
+         // release the Tpe at the index
+         if (_block.cap>0){
+            elem:=_block.rep[_offset + index * _stride];
+            releaser;
+         }
+
+         // move everything else down one
+         uint i = _offset + index * _stride;
+         while (i < _size - 1) {
+            _block.rep[i] = _block.rep[i + 1];
+            i += _stride;
+         }
+         --_size;
+      }
+      
+      // Add all elements and return the value
+      Tpe add(){
+         Tpe result = 0;
+         for (i:=0; i<_size; i++)
+            result+=_block.rep[i];
+         return result;
+      }
+
+      // Apply scalar operator to all elements
+      @define ScalarOper(Tpe, op){
+         Tpe$$Vector oper op(Tpe value){
+            uint i=_offset;
+            while (i < _size){
+               _block.rep[i] = _block.rep[i] op value;
+               i+=_stride;
+            }
+            return this;
+         }
+      }
+
+      // Apply vector operator
+      @define VectorOper(Tpe, op){
+         Tpe$$Vector oper op(Tpe$$Vector vector){
+            if (_isConformant(vector)){ // TODO don't just fail silently here
+               uint i=_offset, j=vector.offset(), vstride=vector.stride();
+               while (i < _size){
+                  _block.rep[i] = _block.rep[i] op vector[j];
+                  i+=_stride;
+                  j+=vstride;
+               }
+            }
+
+            return this;
+         }
+      }
+
+      @VectorOper(Tpe, -)
+
+      @ScalarOper(Tpe, +)
+      @VectorOper(Tpe, +)
+
+      @ScalarOper(Tpe, *)
+      @VectorOper(Tpe, *)
+
+      @ScalarOper(Tpe, /)
+      @VectorOper(Tpe, /)
+      
+   }
+}
+
+@export _getter
+@export GenericVector
+
+@define GenericPrimVector(Tpe){
+   @GenericVector(Tpe, ;, ;);
+}
+
+@define NumericVector(Tpe){
+   @GenericVector(Tpe, ;, ;);
+   
+   class Tpe$$NumericVector: Tpe$$Vector{
+
+      oper init() : Tpe$$Vector() { }
+
+      oper init(uint initCapacity0) : Tpe$$Vector(initCapacity0) {}
+
+      oper init(uint initCapacity0, uint stride0) :
+         Tpe$$Vector(initCapacity0, stride0) {}
+
+      oper init(uint initCapacity0, uint stride0, uint offset0) :
+         Tpe$$Vector(initCapacity0, stride0, offset0) { }
+
+      // Apply scalar operator to all elements
+      @define ScalarOper(Tpe, op){
+         Tpe$$NumericVector oper op(Tpe value){
+            uint i=_offset;
+            while (i < _size){
+               _block.rep[i] = _block.rep[i] op value;
+               i+=_stride;
+            }
+            return this;
+         }
+      }
+
+      // Apply vector operator
+      @define VectorOper(Tpe, op){
+         Tpe$$NumericVector oper op(Tpe$$NumericVector vector){
+            if (_isConformant(vector)){ // TODO don't just fail silently here
+               uint i=_offset, j=vector.offset(), vstride=vector.stride();
+               while (i < _size){
+                  _block.rep[i] = _block.rep[i] op vector[j];
+                  i+=_stride;
+                  j+=vstride;
+               }
+            }
+
+            return this;
+         }
+      }
+
+      @VectorOper(Tpe, -)
+
+      @ScalarOper(Tpe, +)
+      @VectorOper(Tpe, +)
+
+      @ScalarOper(Tpe, *)
+      @VectorOper(Tpe, *)
+
+      @ScalarOper(Tpe, /)
+      @VectorOper(Tpe, /)
+
+      // @ScalarOper(Tpe, -) // This fails, why?
+
+   }
+}
+
+@define GenericObjVector(Tpe){
+   @GenericVector(Tpe, elem.oper bind(), elem.oper release())
+}
+
+@export GenericPrimVector
+@export GenericObjVector
+@export NumericVector
