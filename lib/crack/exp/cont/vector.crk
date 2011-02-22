@@ -352,7 +352,7 @@ import crack.math max;
       }
       
       // Add all elements and return the value
-      Tpe add(){
+      Tpe sum(){
          Tpe result = 0;
          for (i:=0; i<_size; i++)
             result+=_block.rep[i];
@@ -363,7 +363,7 @@ import crack.math max;
       Tpe max(){
          Tpe _max = 0;
          for (i:=0; i<_size; i++)
-            if (_block.rep[i] > _max) _max = _block.rep[i]
+            if (_block.rep[i] > _max) _max = _block.rep[i];
          return _max;
       }
 
