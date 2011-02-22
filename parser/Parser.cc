@@ -818,7 +818,7 @@ ExprPtr Parser::parseSecondary(Expr *expr0, unsigned precedence) {
             if (!funcDef)
                error(tok, 
                      SPUG_FSTR("'oper []=' not defined for " <<
-                               expr->type->name << " with these arguments."
+                               expr->type->name << " with these arguments: (" << args << ")"
                                )
                      );
             funcCall = context->builder.createFuncCall(funcDef.get());
