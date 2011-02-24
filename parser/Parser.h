@@ -120,6 +120,8 @@ class Parser {
        */
       void addDef(model::VarDef *context);
       
+      void addFuncDef(model::FuncDef *funcDef);
+      
       /**
        * Returns the next token from the tokenizer and stores its location in 
        * the current context.
@@ -355,6 +357,8 @@ class Parser {
       void parseWhileStmt();
       void parseForStmt();
       void parseReturnStmt();
+      model::ContextPtr parseTryStmt();
+      model::ContextPtr parseThrowStmt();
       
       /**
        * Parse an import statement.  'ns' is the namespace in which to alias 

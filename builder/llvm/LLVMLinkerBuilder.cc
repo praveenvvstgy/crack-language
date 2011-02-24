@@ -7,6 +7,8 @@
 #include "BTypeDef.h"
 #include "FuncBuilder.h"
 #include "Utils.h"
+#include "BBuilderContextData.h"
+#include "Native.h"
 
 #include <llvm/Support/StandardPasses.h>
 #include <llvm/LLVMContext.h>
@@ -21,6 +23,40 @@ using namespace model;
 using namespace builder;
 using namespace builder::mvll;
 
+
+// emit the final cleanup function, a collection of calls
+// to the cleanup functions for the individual modules we have
+// included in this build
+// by convention, the name is "main:cleanup". this is used by Native.cc
+Function *LLVMLinkerBuilder::emitAggregateCleanup(Module *module) {
+
+    assert(!rootBuilder && "emitAggregateCleanup must be called from "
+                           "root builder");
+
+    LLVMContext &lctx = getGlobalContext();
+    llvm::Constant *c =
+            module->getOrInsertFunction("main:cleanup",
+                                        Type::getVoidTy(lctx), NULL);
+    Function *func = llvm::cast<llvm::Function>(c);
+    func->setCallingConv(llvm::CallingConv::C);
+    BasicBlock *block = BasicBlock::Create(lctx, "", func);
+
+    for (vector<ModuleDef *>::const_iterator i =
+             moduleList->begin();
+         i != moduleList->end();
+         ++i) {
+         Function *dfunc = module->getFunction((*i)->name+":cleanup");
+         // missing a cleanup function isn't an error, because the moduleDef
+         // list currently includes modules that don't have any associated
+         // codegen, like "crack"
+         if (!dfunc)
+             continue;
+         CallInst::Create(dfunc, "", block);
+    }
+    ReturnInst::Create(lctx, block);
+    return func;
+}
+
 Linker *LLVMLinkerBuilder::linkModule(Module *mod) {
     if (linker) {
         string errMsg;
@@ -31,15 +67,26 @@ Linker *LLVMLinkerBuilder::linkModule(Module *mod) {
             mod->dump();
         }
     } else {
-        if (rootBuilder)
+        if (rootBuilder) {
+            if (options->verbosity > 2)
+                std::cerr << "linking " << mod->getModuleIdentifier() <<
+                        std::endl;
             linker = LLVMLinkerBuilderPtr::cast(
                     rootBuilder.get())->linkModule(mod);
+        }
         else {
             linker = new Linker("crack",
                                 "main-module",
                                 getGlobalContext(),
-                                Linker::Verbose // flags
+                                (options->verbosity > 2) ?
+                                    Linker::Verbose :
+                                    0
                                 );
+            assert(linker && "unable to create Linker");
+            if (options->verbosity > 2)
+                std::cerr << "linking " << mod->getModuleIdentifier() <<
+                        std::endl;
+            linkModule(mod);
         }
     }
 
@@ -47,7 +94,7 @@ Linker *LLVMLinkerBuilder::linkModule(Module *mod) {
 }
 
 // maintain a single list of modules throughout the compile in the root builder
-LLVMLinkerBuilder::moduleListType
+LLVMLinkerBuilder::ModuleListType
     *LLVMLinkerBuilder::addModule(ModuleDef *mod) {
 
     if (moduleList) {
@@ -57,7 +104,7 @@ LLVMLinkerBuilder::moduleListType
            moduleList = LLVMLinkerBuilderPtr::cast(
                    rootBuilder.get())->addModule(mod);
         else {
-            moduleList = new moduleListType();
+            moduleList = new ModuleListType();
         }
     }
 
@@ -66,10 +113,10 @@ LLVMLinkerBuilder::moduleListType
 
 
 void *LLVMLinkerBuilder::getFuncAddr(llvm::Function *func) {
-    assert("LLVMLinkerBuilder::getFuncAddr called");
+    assert(false && "LLVMLinkerBuilder::getFuncAddr called");
 }
 
-void LLVMLinkerBuilder::run() {
+void LLVMLinkerBuilder::finish(Context &context) {
 
     assert(!rootBuilder && "run must be called from root builder");
 
@@ -77,17 +124,36 @@ void LLVMLinkerBuilder::run() {
     Module *finalir = linker->getModule();
 
     // LTO optimizations
-    if (optimizeLevel) {
+    if (options->optimizeLevel) {
         PassManager passMan;
         createStandardLTOPasses(&passMan,
                                 true, // internalize
                                 true, // inline
-                                debugMode // verify each
+                                options->debugMode // verify each
                                 );
         passMan.run(*finalir);
     }
 
-    //nativeCompile(finalir, options);
+    emitAggregateCleanup(finalir);
+
+    // if we're not optimizing but we're doing debug, verify now
+    // if we are optimizing and we're doing debug, verify is done in the
+    // LTO passes above instead
+    if (!options->optimizeLevel && options->debugMode)
+        verifyModule(*finalir, llvm::PrintMessageAction);
+
+    nativeCompile(finalir,
+                  options.get(),
+                  sharedLibs,
+                  context.construct->sourceLibPath
+                  );
+
+    if (options->dumpMode) {
+        PassManager passMan;
+        passMan.add(llvm::createPrintModulePass(&llvm::outs()));
+        passMan.run(*finalir);
+        return;
+    }
 
 }
 
@@ -95,8 +161,7 @@ BuilderPtr LLVMLinkerBuilder::createChildBuilder() {
     LLVMLinkerBuilder *result = new LLVMLinkerBuilder();
     result->rootBuilder = rootBuilder ? rootBuilder : this;
     result->llvmVoidPtrType = llvmVoidPtrType;
-    result->dumpMode = dumpMode;
-    result->debugMode = debugMode;
+    result->options = options;
     return result;
 }
 
@@ -107,17 +172,18 @@ ModuleDefPtr LLVMLinkerBuilder::createModule(Context &context,
     LLVMContext &lctx = getGlobalContext();
     module = new llvm::Module(name, lctx);
 
-    if (debugMode) {
+    if (options->debugMode) {
         debugInfo = new DebugInfo(module, name);
     }
+
+    BBuilderContextData::get(&context);
 
     llvm::Constant *c =
         module->getOrInsertFunction(name+":main", Type::getVoidTy(lctx), NULL);
     func = llvm::cast<llvm::Function>(c);
     func->setCallingConv(llvm::CallingConv::C);
 
-    block = BasicBlock::Create(lctx, "initCheck", func);
-    builder.SetInsertPoint(block);
+    builder.SetInsertPoint(BasicBlock::Create(lctx, "initCheck", func));
 
     // insert point is now at the begining of the :main function for
     // this module. this will run the top level code for the module
@@ -138,7 +204,7 @@ ModuleDefPtr LLVMLinkerBuilder::createModule(Context &context,
     // has been set to 1
     BasicBlock *alreadyInitBlock = BasicBlock::Create(lctx, "alreadyInit", func);
     assert(!mainInsert);
-    block = mainInsert = BasicBlock::Create(lctx, "topLevel", func);
+    mainInsert = BasicBlock::Create(lctx, "topLevel", func);
     Value* currentInitVal = builder.CreateLoad(moduleInit);
     builder.CreateCondBr(currentInitVal, alreadyInitBlock, mainInsert);
 
@@ -172,48 +238,6 @@ ModuleDefPtr LLVMLinkerBuilder::createModule(Context &context,
         BTypeDefPtr::arcast(context.construct->byteptrType);
     BTypeDef *voidptrType =
         BTypeDefPtr::arcast(context.construct->voidptrType);
-
-    // create "int puts(String)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, int32Type, "puts",
-                      1
-                      );
-        f.addArg("text", byteptrType);
-        f.setSymbolName("puts");
-        f.finish();
-    }
-
-    // create "void printint(int32)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printint", 1);
-        f.addArg("val", int32Type);
-        f.setSymbolName("printint");
-        f.finish();
-    }
-
-    // create "void printint64(int64)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printint64", 1);
-        f.addArg("val", int64Type);
-        f.setSymbolName("printint64");
-        f.finish();
-    }
-
-    // create "void printuint64(int64)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printuint64", 1);
-        f.addArg("val", uint64Type);
-        f.setSymbolName("printuint64");
-        f.finish();
-    }
-
-    // create "void printfloat(float32)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printfloat", 1);
-        f.addArg("val", float32Type);
-        f.setSymbolName("printfloat");
-        f.finish();
-    }
 
     // create "void *calloc(uint size)"
     {
@@ -261,16 +285,19 @@ void LLVMLinkerBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
     assert(module);
     builder.CreateRetVoid();
 
+    // since the cleanups have to be emitted against the module context, clear 
+    // the unwind blocks so we generate them for the del function.
+    clearCachedCleanups(context);
+
     // emit the cleanup function for this module
     // we will emit calls to these (for all modules) during run() in the finalir
     LLVMContext &lctx = getGlobalContext();
     llvm::Constant *c =
         module->getOrInsertFunction(moduleDef->name+":cleanup",
                                     Type::getVoidTy(lctx), NULL);
-    Function *dfunc = llvm::cast<llvm::Function>(c);
-    dfunc->setCallingConv(llvm::CallingConv::C);
-    block = BasicBlock::Create(lctx, "", dfunc);
-    builder.SetInsertPoint(block);
+    func = llvm::cast<llvm::Function>(c);
+    func->setCallingConv(llvm::CallingConv::C);
+    builder.SetInsertPoint(BasicBlock::Create(lctx, "", func));
     closeAllCleanupsStatic(context);
     builder.CreateRetVoid();
 
@@ -279,4 +306,43 @@ void LLVMLinkerBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
     if (debugInfo)
         delete debugInfo;
 
+}
+
+void *LLVMLinkerBuilder::loadSharedLibrary(const string &name) {
+    sharedLibs.push_back(name);
+    LLVMBuilder::loadSharedLibrary(name);
+}
+
+void LLVMLinkerBuilder::initializeImport(model::ModuleDefPtr m,
+                                         bool annotation) {
+
+
+    // if the module came from an extension, there's no top level to run
+    if (m->fromExtension || annotation)
+        return;
+
+    // we add a call into our module's :main function
+    // to run the top level function of the imported module
+    // each :main is only run once, however, so that a module imported
+    // from two different modules will have its top level code only
+    // run once. this is handled in the :main function itself.
+    BasicBlock *orig = builder.GetInsertBlock();
+    assert(mainInsert && "no main insert block");
+    builder.SetInsertPoint(mainInsert);
+
+    // declaration
+    Constant *fc = module->getOrInsertFunction(m->name+":main",
+                                              Type::getVoidTy(getGlobalContext()),
+                                              NULL);
+    Function *f = llvm::cast<llvm::Function>(fc);
+    vector<Value*> args;
+    builder.CreateCall(f, args.begin(), args.end());
+
+    builder.SetInsertPoint(orig);
+
+}
+
+void LLVMLinkerBuilder::engineFinishModule(ModuleDef *moduleDef) {
+    // XXX only called for builtin, refactor this
+    linkModule(module);
 }

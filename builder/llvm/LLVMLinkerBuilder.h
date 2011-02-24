@@ -18,32 +18,46 @@ SPUG_RCPTR(LLVMLinkerBuilder);
 
 class LLVMLinkerBuilder : public LLVMBuilder {
     private:
-        typedef std::vector<model::ModuleDef *> moduleListType;
+        typedef std::vector<model::ModuleDef *> ModuleListType;
 
         llvm::Linker *linker;
-        moduleListType *moduleList;
+        ModuleListType *moduleList;
         llvm::BasicBlock *mainInsert;
+        std::vector<std::string> sharedLibs;
 
         llvm::Linker *linkModule(llvm::Module *mp);
-        moduleListType *addModule(model::ModuleDef *mp);
+        ModuleListType *addModule(model::ModuleDef *mp);
+
+        llvm::Function *emitAggregateCleanup(llvm::Module *module);
+
+    protected:
+        virtual void engineFinishModule(model::ModuleDef *moduleDef);
 
     public:
         LLVMLinkerBuilder(void) : linker(0),
                                   moduleList(0),
-                                  mainInsert(0) { }
+                                  mainInsert(0),
+                                  sharedLibs() { }
 
         virtual void *getFuncAddr(llvm::Function *func);
 
-        virtual void run();
+        virtual void finish(model::Context &context);
 
         virtual BuilderPtr createChildBuilder();
 
         virtual model::ModuleDefPtr createModule(model::Context &context,
                                                  const std::string &name
                                                  );
+
+        virtual void initializeImport(model::ModuleDefPtr, bool annotation);
+
+        virtual void *loadSharedLibrary(const std::string &name);
+
         virtual void closeModule(model::Context &context,
                                  model::ModuleDef *module
                                  );
+
+        virtual bool isExec() { return false; }
 
 };
 

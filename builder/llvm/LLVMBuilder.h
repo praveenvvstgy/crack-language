@@ -55,8 +55,6 @@ class LLVMBuilder : public Builder {
         typedef std::map<model::VarDefImpl *, llvm::GlobalVariable *> ModVarMap;
         ModVarMap moduleVars;
 
-        bool dumpMode, debugMode;
-
         LLVMBuilderPtr rootBuilder;
 
         void initializeMethodInfo(model::Context &context, 
@@ -82,13 +80,26 @@ class LLVMBuilder : public Builder {
          * possibly bind the module to an execution engine. this is run
          * immediately after the module is created in createModule
          */
-        virtual void engineBindModule(model::ModuleDef *moduleDef) { };
+        virtual void engineBindModule(model::ModuleDef *moduleDef) { }
 
         /**
          * let the engine "finish" a module before running/linking/dumping
          * this is run immediately after closeModule and before run() or dump()
          */
-        virtual void engineFinishModule(model::ModuleDef *moduleDef) { };
+        virtual void engineFinishModule(model::ModuleDef *moduleDef) { }
+
+        /**
+         * Gets the first unwind block for the context, emitting the whole 
+         * cleanup chain if necessary.
+         */
+        llvm::BasicBlock *getUnwindBlock(model::Context &context);
+        
+        /**
+         * Clears all cached cleanup blocks associated with the context (this 
+         * exists to deal with the module level init and delete functions, 
+         * which both run against the module context).
+         */
+        void clearCachedCleanups(model::Context &context);
 
     public:
         // currently experimenting with making these public to give objects in 
@@ -99,7 +110,7 @@ class LLVMBuilder : public Builder {
         llvm::Type *llvmVoidPtrType;
         llvm::IRBuilder<> builder;
         llvm::Value *lastValue;
-        llvm::BasicBlock *block, *funcBlock;
+        llvm::BasicBlock *funcBlock;
         static int argc;
         static char **argv;
 
@@ -216,6 +227,21 @@ class LLVMBuilder : public Builder {
                                   model::Branchpoint *branch
                                   );
 
+        virtual model::BranchpointPtr emitBeginTry(model::Context &context);
+        
+        virtual void emitCatch(model::Context &context,
+                               model::Branchpoint *branchpoint,
+                               model::TypeDef *catchType
+                               );
+        
+        virtual void emitEndTry(model::Context &context,
+                                model::Branchpoint *branchpoint
+                                );
+
+        virtual void emitThrow(model::Context &context,
+                               model::Expr *expr
+                               );
+
         virtual model::FuncDefPtr
             createFuncForward(model::Context &context,
                               model::FuncDef::Flags flags,
@@ -311,7 +337,10 @@ class LLVMBuilder : public Builder {
                                                   );
 
         virtual model::ModuleDefPtr registerPrimFuncs(model::Context &context);
-        virtual void loadSharedLibrary(const std::string &name,
+
+        virtual void *loadSharedLibrary(const std::string &name);
+
+        virtual void importSharedLibrary(const std::string &name,
                                        const std::vector<std::string> &symbols,
                                        model::Context &context,
                                        model::Namespace *ns
@@ -320,9 +349,9 @@ class LLVMBuilder : public Builder {
                                     model::VarDef *varDef
                                     );
 
+        virtual void initializeImport(model::ModuleDefPtr, bool annotation) { }
+
         virtual void setArgv(int argc, char **argv);        
-        virtual void run() = 0;
-        virtual void dump();
         
         // internal functions used by our VarDefImpl to generate the 
         // appropriate variable references.
@@ -335,9 +364,14 @@ class LLVMBuilder : public Builder {
                                     model::TypeDef *typeDef
                                     );
 
-        virtual void setDumpMode(bool dump);
-        
-        virtual void setDebug(bool debug);
+        // these are implemented by Jit, but not Linker
+        virtual void run() { }
+        virtual void dump() { }
+
+        // this is implemented by Linker, but not Jit
+        virtual void finish(model::Context &context) { }
+
+
 };
 
 } // namespace builder::mvll

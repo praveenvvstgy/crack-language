@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <fstream>
 #include <dlfcn.h>
+#include <stdlib.h>
 #include "parser/Parser.h"
 #include "parser/ParseError.h"
 #include "parser/Toker.h"
@@ -27,7 +28,8 @@ Construct::ModulePath Construct::searchPath(
     const Construct::StringVec &path,
     Construct::StringVecIter moduleNameBegin,
     Construct::StringVecIter moduleNameEnd,
-    const std::string &extension
+    const std::string &extension,
+    int verbosity
 ) {
     // try to find a matching file.
     for (StringVecIter pathIter = path.begin();
@@ -37,6 +39,9 @@ Construct::ModulePath Construct::searchPath(
         string fullName = joinName(*pathIter, moduleNameBegin, moduleNameEnd,
                                    extension
                                    );
+        if (verbosity > 1) {
+            cerr << "search: " << fullName << endl;
+        }
         if (isFile(fullName))
             return ModulePath(fullName, true, false);
     }
@@ -113,7 +118,7 @@ void Construct::addToSourceLibPath(const string &path) {
     while (i != -1) {
         sourceLibPath.push_back(path.substr(pos, i - pos));
         pos = i + 1;
-        i = path.find('.', pos);
+        i = path.find(':', pos);
     }
     sourceLibPath.push_back(path.substr(pos));
 }
@@ -168,6 +173,36 @@ void Construct::loadBuiltinModules() {
     rootContext->compileNS->addAlias(ns->lookUp("final").get());
     rootContext->compileNS->addAlias(ns->lookUp("FILE").get());
     rootContext->compileNS->addAlias(ns->lookUp("LINE").get());
+
+
+    // load the runtime extension
+    StringVec crackRuntimeName(2);
+    crackRuntimeName[0] = "crack";
+    crackRuntimeName[1] = "runtime";
+    string name;
+    ModuleDefPtr rtMod = rootContext->construct->loadModule(
+                                                     crackRuntimeName.begin(),
+                                                     crackRuntimeName.end(),
+                                                     name
+                                                     );
+    if (!rtMod) {
+        cerr << "failed to load crack runtime from module load path" << endl;
+        // XXX exception?
+        exit(1);
+    }
+    // alias some basic builtins from runtime
+    // mostly for legacy reasons
+    VarDefPtr a = rtMod->lookUp("puts");
+    assert(a && "no puts in runtime");
+    rootContext->ns->addAlias("puts", a.get());
+    a = rtMod->lookUp("__die");
+    assert(a && "no __die in runtime");
+    rootContext->ns->addAlias("__die", a.get());
+    rootContext->compileNS->addAlias("__die", a.get());
+    a = rtMod->lookUp("printint");
+    if (a)
+        rootContext->ns->addAlias("printint", a.get());
+
 }
 
 void Construct::parseModule(Context &context,
@@ -197,9 +232,10 @@ ModuleDefPtr Construct::initExtensionModule(const string &canonicalName,
     ModuleDefPtr modDef = context->createModule(canonicalName);
     Module mod(context.get());
     initFunc(&mod);
+    modDef->fromExtension = true;
     mod.finish();
     modDef->close(*context);
-    
+
     return modDef;
 }
 
@@ -208,12 +244,9 @@ ModuleDefPtr Construct::loadSharedLib(const string &path,
                                       Construct::StringVecIter moduleNameEnd,
                                       string &canonicalName
                                       ) {
-    void *handle = dlopen(path.c_str(), RTLD_LAZY|RTLD_GLOBAL);
-    if (!handle) {
-        cerr << "opening library " << path << ": " << dlerror() << endl;
-        return 0;
-    }
-    
+
+    void *handle = rootBuilder->loadSharedLibrary(path);
+
     // construct the full init function name XXX should do real name mangling
     std::string initFuncName;
     for (StringVecIter iter = moduleNameBegin;
@@ -269,7 +302,8 @@ ModuleDefPtr Construct::loadModule(Construct::StringVecIter moduleNameBegin,
     // look for a shared library
     ModulePath modPath = searchPath(sourceLibPath, moduleNameBegin,
                                     moduleNameEnd,
-                                    ".so"
+                                    ".so",
+                                    rootBuilder->options->verbosity
                                     );
     
     ModuleDefPtr modDef;
@@ -283,7 +317,7 @@ ModuleDefPtr Construct::loadModule(Construct::StringVecIter moduleNameBegin,
         
         // try to find the module on the source path
         modPath = searchPath(sourceLibPath, moduleNameBegin, moduleNameEnd, 
-                            ".crk"
+                            ".crk", rootBuilder->options->verbosity
                             );
         if (!modPath.found)
             return 0;
@@ -404,4 +438,5 @@ int Construct::runScript(istream &src, const string &name) {
         cerr << ex << endl;
         return 1;
     }
+    rootBuilder->finish(*context);
 }

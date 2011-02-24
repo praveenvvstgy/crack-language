@@ -32,8 +32,6 @@
 #include <llvm/LLVMContext.h>
 #include <llvm/PassManager.h>
 #include <llvm/CallingConv.h>
-#include <llvm/Analysis/Verifier.h>
-#include <llvm/Assembly/PrintModulePass.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <spug/Exception.h>
@@ -70,27 +68,6 @@ char **LLVMBuilder::argv = tempArgv;
 
 extern "C" {
 
-    void printfloat(float val) {
-        std::cout << val << flush;
-    }
-
-    void printint(int val) {
-        std::cout << val << flush;
-    }
-
-    void printint64(int64_t val) {
-        std::cout << val << flush;
-    }
-
-    void printuint64(uint64_t val) {
-        std::cout << val << flush;
-    }
-
-    void __die(const char *message) {
-        std::cout << message << endl;
-        abort();
-    }
-
     char **__getArgv() {
         return LLVMBuilder::argv;
     }
@@ -104,15 +81,46 @@ extern "C" {
 
 namespace {
 
-    // emit all cleanups from this context to that of the branchpoint.
-    void emitCleanupsTo(Context &context, BBranchpoint *bpos) {
+    // emit all cleanups from this context to outerContext (non-inclusive)
+    void emitCleanupsTo(Context &context, Context &outerContext) {
         
         // unless we've reached our stop, emit for all parent contexts
-        if (!(bpos->context == &context)) {
+        if (&outerContext != &context) {
     
             // close all cleanups in thie context
             closeAllCleanupsStatic(context);
-            emitCleanupsTo(*context.parent, bpos);
+            emitCleanupsTo(*context.parent, outerContext);
+        }
+    }
+
+    BasicBlock *emitUnwindFrameCleanups(BCleanupFrame *frame, 
+                                        BasicBlock *next
+                                        ) {
+        if (frame->parent)
+            next = emitUnwindFrameCleanups(
+                BCleanupFramePtr::rcast(frame->parent),
+                next
+            );
+        return frame->emitUnwindCleanups(next);
+    }
+    
+    BasicBlock *emitUnwindCleanups(Context &context, Context &outerContext,
+                                   BasicBlock *finalBlock
+                                   ) {
+        
+        // unless we've reached our stop, emit for all parent contexts
+        if (&outerContext != &context) {
+            
+            // emit the cleanups in the parent block
+            BasicBlock *next =
+                emitUnwindCleanups(*context.parent, outerContext, finalBlock);
+    
+            // close all cleanups in thie context
+            BCleanupFrame *frame = 
+                BCleanupFramePtr::rcast(context.cleanupFrame);
+            return emitUnwindFrameCleanups(frame, next);
+        } else {
+            return finalBlock;
         }
     }
 
@@ -161,14 +169,17 @@ namespace {
                                           builder.module
                                           );
         func->setCallingConv(llvm::CallingConv::C);
-        builder.block =
-            BasicBlock::Create(lctx, "__builtin_init__", builder.func);
+        builder.builder.SetInsertPoint(BasicBlock::Create(lctx, 
+                                                          "__builtin_init__", 
+                                                          builder.func
+                                                          )
+                                       );
 
         // add "Class"
         int lineNum = __LINE__ + 1;
         string temp("    byteptr name;\n"
                     "    uint numBases;\n"
-                    "    array[Class] bases = null;\n"
+                    "    array[Class] bases;\n"
                     "    bool isSubclass(Class other) {\n"
                     "        if (this is other)\n"
                     "            return (1==1);\n"
@@ -220,7 +231,7 @@ namespace {
         createClassImpl(context, BTypeDefPtr::acast(type));
     }
 
-    void addExplicitTruncate(BTypeDef *sourceType,
+    void addExplicitTruncate(Context &context, BTypeDef *sourceType,
                              BTypeDef *targetType
                              ) {
         FuncDefPtr func =
@@ -229,21 +240,21 @@ namespace {
                                           1
                                           );
         func->args[0] = new ArgDef(sourceType, "val");
-        targetType->addDef(func.get());
+        context.addDef(func.get(), targetType);
     }
     
-    void addNopNew(BTypeDef *type) {
+    void addNopNew(Context &context, BTypeDef *type) {
         FuncDefPtr func =
             new GeneralOpDef<NoOpCall>(type, FuncDef::noFlags,
                                        "oper new",
                                        1
                                        );
         func->args[0] = new ArgDef(type, "val");
-        type->addDef(func.get());
+        context.addDef(func.get(), type);
     }
 
     template <typename opType>
-    void addExplicitFPTruncate(BTypeDef *sourceType,
+    void addExplicitFPTruncate(Context &context, BTypeDef *sourceType,
                                BTypeDef *targetType
                                ) {
         FuncDefPtr func =
@@ -252,7 +263,7 @@ namespace {
                                           1
                                           );
         func->args[0] = new ArgDef(sourceType, "val");
-        targetType->addDef(func.get());
+        context.addDef(func.get(), targetType);
     }
 
     BTypeDef *createIntPrimType(Context &context, const Type *llvmType,
@@ -264,34 +275,36 @@ namespace {
                                          );
         btype->defaultInitializer =
             context.builder.createIntConst(context, 0, btype.get());
-        btype->addDef(new BoolOpDef(context.construct->boolType.get(),
-                                    "toBool"
-                                    )
-                      );
+        context.addDef(new BoolOpDef(context.construct->boolType.get(),
+                                     "toBool"
+                                     ),
+                       btype.get()
+                       );
 
         // if you remove this, for the love of god, change the return type so
         // we don't leak the pointer.
-        context.ns->addDef(btype.get());
+        context.addDef(btype.get());
         return btype.get();
     }
 
     BTypeDef *createFloatPrimType(Context &context, const Type *llvmType,
-                             const char *name
-                             ) {
+                                  const char *name
+                                  ) {
         BTypeDefPtr btype = new BTypeDef(context.construct->classType.get(),
                                          name,
                                          llvmType
                                          );
         btype->defaultInitializer =
             context.builder.createFloatConst(context, 0.0, btype.get());
-        btype->addDef(new FBoolOpDef(context.construct->boolType.get(),
-                                    "toBool"
-                                    )
-                      );
+        context.addDef(new FBoolOpDef(context.construct->boolType.get(),
+                                      "toBool"
+                                      ),
+                       btype.get()
+                       );
 
         // if you remove this, for the love of god, change the return type so
         // we don't leak the pointer.
-        context.ns->addDef(btype.get());
+        context.addDef(btype.get());
         return btype.get();
     }
 
@@ -334,6 +347,53 @@ void LLVMBuilder::initializeMethodInfo(Context &context, FuncDef::Flags flags,
     }
 }
 
+BasicBlock *LLVMBuilder::getUnwindBlock(Context &context) {
+    // get the catch-level context and unwind block
+    ContextPtr outerContext = context.getCatch();
+    BBranchpointPtr bpos =
+        BBranchpointPtr::rcast(outerContext->getCatchBranchpoint());
+
+    BasicBlock *final;
+    if (bpos) {
+        final = bpos->block;
+    } else {
+        // no catch clause.  Find or create the unwind clause for the function 
+        // to continue the unwind.
+        ContextPtr funcCtx = context.getToplevel();
+        BBuilderContextData *bdata = 
+            BBuilderContextDataPtr::arcast(funcCtx->builderData);
+        if (!bdata->unwindBlock) {
+            bdata->unwindBlock = BasicBlock::Create(getGlobalContext(),
+                                                    "unwind",
+                                                    func
+                                                    );
+            IRBuilder<> b(bdata->unwindBlock);
+            b.CreateUnwind();
+        }
+        
+        // assertion to make sure this is the right unwind block
+        if (bdata->unwindBlock->getParent() != func) {
+            string bdataFunc = bdata->unwindBlock->getParent()->getName();
+            string curFunc = func->getName();
+            cerr << "bad function for unwind block, got " <<
+                bdataFunc << " expected " << curFunc << endl;
+            assert(false);
+        }
+
+        final = bdata->unwindBlock;
+    }
+    
+    return emitUnwindCleanups(context, *outerContext, final);
+}
+
+void LLVMBuilder::clearCachedCleanups(Context &context) {
+    BCleanupFrame *frame = BCleanupFramePtr::rcast(context.cleanupFrame);
+    if (frame)
+        frame->clearCachedCleanups();
+    BBuilderContextData *bdata = BBuilderContextData::get(&context);
+    bdata->unwindBlock = 0;
+}
+
 void LLVMBuilder::narrow(TypeDef *curType, TypeDef *ancestor) {
     // quick short-circuit to deal with the trivial case
     if (curType == ancestor)
@@ -351,7 +411,8 @@ void LLVMBuilder::narrow(TypeDef *curType, TypeDef *ancestor) {
         // create a placeholder instruction
         PlaceholderInstruction *placeholder =
             new IncompleteNarrower(lastValue, bcurType, bancestor,
-                                   block);
+                                   builder.GetInsertBlock()
+                                   );
         lastValue = placeholder;
 
         // store it
@@ -367,7 +428,7 @@ Function *LLVMBuilder::getModFunc(FuncDef *funcDef) {
         BFuncDef *bfuncDef = BFuncDefPtr::acast(funcDef);
         Function *func = Function::Create(bfuncDef->rep->getFunctionType(),
                                           Function::ExternalLinkage,
-                                          bfuncDef->getFullName(),
+                                          bfuncDef->rep->getName(),
                                           module
                                           );
 
@@ -429,8 +490,9 @@ TypeDef *LLVMBuilder::getFuncType(Context &context,
     funcTypes[llvmFuncType] = crkFuncType;
     
     // Give it an "oper to voidptr" method.
-    crkFuncType->addDef(
-        new VoidPtrOpDef(context.construct->voidptrType.get())
+    context.addDef(
+        new VoidPtrOpDef(context.construct->voidptrType.get()),
+        crkFuncType.get()
     );
     
     return crkFuncType.get();
@@ -458,12 +520,9 @@ BHeapVarDefImplPtr LLVMBuilder::createLocalVar(BTypeDef *tp, Value *&var,
 
 LLVMBuilder::LLVMBuilder() :
     debugInfo(0),
-    dumpMode(false),
-    debugMode(false),
     module(0),
     builder(getGlobalContext()),
     func(0),
-    block(0),
     lastValue(0) {
 
 }
@@ -498,16 +557,39 @@ ResultExprPtr LLVMBuilder::emitFuncCall(Context &context, FuncCall *funcCall) {
         valueArgs.push_back(lastValue);
     }
 
+    // if we're already emitting cleanups for an unwind, both the normal 
+    // destination block and the cleanup block are the same.
+    BasicBlock *followingBlock = 0, *cleanupBlock;
+    BBuilderContextData *bdata;
+    if (context.emittingCleanups &&
+        (bdata = BBuilderContextDataPtr::rcast(context.builderData))
+        )
+        followingBlock = cleanupBlock = bdata->nextCleanupBlock;
+
+    // otherwise, create a new normal destinatation block and get the cleanup 
+    // block.
+    if (!followingBlock) {
+        followingBlock = BasicBlock::Create(getGlobalContext(), "l", 
+                                            this->func
+                                            );
+        cleanupBlock = getUnwindBlock(context);
+    }
+
     if (funcCall->virtualized)
         lastValue = IncompleteVirtualFunc::emitCall(context, funcDef, 
                                                     receiver,
-                                                    valueArgs
+                                                    valueArgs,
+                                                    followingBlock,
+                                                    cleanupBlock
                                                     );
     else {
         lastValue =
-            builder.CreateCall(funcDef->getRep(*this), valueArgs.begin(), 
-                               valueArgs.end()
-                               );
+            builder.CreateInvoke(funcDef->getRep(*this), followingBlock, 
+                                 cleanupBlock,
+                                 valueArgs.begin(), 
+                                 valueArgs.end()
+                                 );
+
         /*
         if (debugInfo) {
             builder.SetCurrentDebugLocation(
@@ -516,6 +598,11 @@ ResultExprPtr LLVMBuilder::emitFuncCall(Context &context, FuncCall *funcCall) {
         }
         */
     }
+
+    // continue emitting code into the new following block.
+    if (followingBlock != cleanupBlock)
+        builder.SetInsertPoint(followingBlock);
+
     return new BResultExpr(funcCall, lastValue);
 }
 
@@ -534,7 +621,8 @@ ResultExprPtr LLVMBuilder::emitStrConst(Context &context, StrConst *val) {
                                                   true, // is constant
                                                   GlobalValue::InternalLinkage,
                                                   llvmVal,
-                                                  "",
+                                                 "str:"+
+                                                  module->getModuleIdentifier(),
                                                   0,
                                                   false);
         
@@ -638,14 +726,14 @@ BranchpointPtr LLVMBuilder::labeledIf(Context &context, Expr *cond,
 
     context.createCleanupFrame();
     cond->emitCond(context);
-    result->block2 = block; // condition block
     Value *condVal = lastValue; // condition value
     context.closeCleanupFrame();
+    result->block2 = builder.GetInsertBlock(); // condition block
     lastValue = condVal;
     builder.CreateCondBr(lastValue, trueBlock, result->block);
     
     // repoint to the new ("if true") block
-    builder.SetInsertPoint(block = trueBlock);
+    builder.SetInsertPoint(trueBlock);
     return result;
 }
 
@@ -665,7 +753,7 @@ BranchpointPtr LLVMBuilder::emitElse(model::Context &context,
     }    
 
     // new block is the "false" condition
-    builder.SetInsertPoint(block = falseBlock);
+    builder.SetInsertPoint(falseBlock);
     return pos;
 }
         
@@ -687,7 +775,7 @@ void LLVMBuilder::emitEndIf(Context &context,
     // if we ended up with any non-terminal paths our of the if, the new 
     // block is the next block
     if (bpos->block)
-        builder.SetInsertPoint(block = bpos->block);
+        builder.SetInsertPoint(bpos->block);
 }
 
 TernaryExprPtr LLVMBuilder::createTernary(model::Context &context,
@@ -711,7 +799,7 @@ ResultExprPtr LLVMBuilder::emitTernary(Context &context, TernaryExpr *expr) {
     BasicBlock *oBlock = bpos->block2; // condition block
 
     // now pointing to true block, save it for phi
-    BasicBlock *trueBlock = block;
+    BasicBlock *trueBlock = builder.GetInsertBlock();
     
     // create the block after the expression
     LLVMContext &lctx = getGlobalContext();
@@ -728,20 +816,20 @@ ResultExprPtr LLVMBuilder::emitTernary(Context &context, TernaryExpr *expr) {
     builder.CreateBr(postBlock);
     
     // pick up changes to the block
-    trueBlock = block;
+    trueBlock = builder.GetInsertBlock();
     
     // emit the false expression 
-    builder.SetInsertPoint(block = falseBlock);
+    builder.SetInsertPoint(falseBlock);
     context.createCleanupFrame();
     expr->falseVal->emit(context);
     narrow(expr->falseVal->type.get(), expr->type.get());
     Value *falseVal = lastValue;
     context.closeCleanupFrame();
     builder.CreateBr(postBlock);
-    falseBlock = block;
+    falseBlock = builder.GetInsertBlock();
 
     // emit the phi
-    builder.SetInsertPoint(block = postBlock);
+    builder.SetInsertPoint(postBlock);
     PHINode *p = builder.CreatePHI(
         BTypeDefPtr::arcast(expr->type)->rep,
         "tern_R"
@@ -781,7 +869,7 @@ BranchpointPtr LLVMBuilder::emitBeginWhile(Context &context,
     
     BasicBlock *whileBody = BasicBlock::Create(lctx, "while_body", func);
     builder.CreateBr(whileCond);
-    builder.SetInsertPoint(block = whileCond);
+    builder.SetInsertPoint(whileCond);
 
     // XXX see notes above on a conditional type.
     context.createCleanupFrame();
@@ -792,7 +880,7 @@ BranchpointPtr LLVMBuilder::emitBeginWhile(Context &context,
     builder.CreateCondBr(lastValue, whileBody, bpos->block);
 
     // begin generating code in the while body    
-    builder.SetInsertPoint(block = whileBody);
+    builder.SetInsertPoint(whileBody);
 
     return bpos;
 }
@@ -811,7 +899,7 @@ void LLVMBuilder::emitEndWhile(Context &context, Branchpoint *pos,
             builder.CreateBr(bpos->block2);
 
     // new code goes to the following block
-    builder.SetInsertPoint(block = bpos->block);
+    builder.SetInsertPoint(bpos->block);
 }
 
 void LLVMBuilder::emitPostLoop(model::Context &context,
@@ -827,19 +915,42 @@ void LLVMBuilder::emitPostLoop(model::Context &context,
         builder.CreateBr(bpos->block2);
 
     // set the new block to the post-loop
-    builder.SetInsertPoint(block = bpos->block2);
+    builder.SetInsertPoint(bpos->block2);
 }
 
 void LLVMBuilder::emitBreak(Context &context, Branchpoint *branch) {
     BBranchpoint *bpos = BBranchpointPtr::acast(branch);
-    emitCleanupsTo(context, bpos);
+    emitCleanupsTo(context, *bpos->context);
     builder.CreateBr(bpos->block);
 }
 
 void LLVMBuilder::emitContinue(Context &context, Branchpoint *branch) {
     BBranchpoint *bpos = BBranchpointPtr::acast(branch);
-    emitCleanupsTo(context, bpos);
+    emitCleanupsTo(context, *bpos->context);
     builder.CreateBr(bpos->block2);
+}
+
+BranchpointPtr LLVMBuilder::emitBeginTry(model::Context &context) {
+    BasicBlock *catchBlock = BasicBlock::Create(getGlobalContext(), "catch");
+    BBranchpointPtr bpos = new BBranchpoint(catchBlock);
+    return bpos;
+}
+
+void LLVMBuilder::emitCatch(Context &context,
+                            Branchpoint *branchpoint,
+                            TypeDef *catchType
+                            ) {
+}
+
+void LLVMBuilder::emitEndTry(model::Context &context,
+                             Branchpoint *branchpoint
+                             ) {
+}
+
+void LLVMBuilder::emitThrow(Context &context,
+                            Expr *expr
+                            ) {
+    builder.CreateUnwind();
 }
 
 FuncDefPtr LLVMBuilder::createFuncForward(Context &context,
@@ -883,10 +994,11 @@ BTypeDefPtr LLVMBuilder::createClass(Context &context, const string &name,
     metaType->meta = type.get();
     
     // create the unsafeCast() function.
-    metaType->addDef(new UnsafeCastDef(type.get()));
+    context.addDef(new UnsafeCastDef(type.get()), metaType.get());
     
     // create function to convert to voidptr
-    type->addDef(new VoidPtrOpDef(context.construct->voidptrType.get()));
+    context.addDef(new VoidPtrOpDef(context.construct->voidptrType.get()), 
+                   type.get());
 
     // make the class default to initializing to null
     type->defaultInitializer = new NullConst(type.get());
@@ -913,7 +1025,7 @@ FuncDefPtr LLVMBuilder::emitBeginFunc(Context &context,
     BBuilderContextData *contextData;
     context.builderData = contextData = new BBuilderContextData();
     contextData->func = func;
-    contextData->block = block;
+    contextData->block = builder.GetInsertBlock();
     
     // if we didn't get a forward declaration, create the function.
     BFuncDefPtr funcDef;
@@ -965,8 +1077,19 @@ FuncDefPtr LLVMBuilder::emitBeginFunc(Context &context,
     }
 
     func = funcDef->rep;
-    funcBlock = block = BasicBlock::Create(getGlobalContext(), name, func);
-    builder.SetInsertPoint(block);
+    
+    // create the "function block" (the first block in the function, will be 
+    // used to hold all local variable allocations)
+    funcBlock = BasicBlock::Create(getGlobalContext(), name, func);
+    builder.SetInsertPoint(funcBlock);
+    
+    // since the function block can get appended to arbitrarily, create a 
+    // first block where it is safe for us to emit terminating instructions
+    BasicBlock *firstBlock = BasicBlock::Create(getGlobalContext(), "l",
+                                                func
+                                                );
+    builder.CreateBr(firstBlock);
+    builder.SetInsertPoint(firstBlock);
     
     if (flags & FuncDef::virtualized) {
         // emit code to convert from the first declaration base class 
@@ -1000,6 +1123,7 @@ void LLVMBuilder::emitEndFunc(model::Context &context,
                               FuncDef *funcDef) {
     // in certain conditions, (multiple terminating branches) we can end up 
     // with an empty block.  If so, remove.
+    BasicBlock *block = builder.GetInsertBlock();
     if (block->begin() == block->end())
         block->eraseFromParent();
 
@@ -1007,7 +1131,7 @@ void LLVMBuilder::emitEndFunc(model::Context &context,
     BBuilderContextData *contextData =
         BBuilderContextDataPtr::rcast(context.builderData);
     func = contextData->func;
-    builder.SetInsertPoint(block = contextData->block);
+    builder.SetInsertPoint(contextData->block);
 }
 
 FuncDefPtr LLVMBuilder::createExternFunc(Context &context,
@@ -1051,7 +1175,7 @@ FuncDefPtr LLVMBuilder::createExternFunc(Context &context,
         f.setReceiverType(BTypeDefPtr::acast(receiverType));
         ArgDefPtr thisDef = 
             funcCtx->builder.createArgDef(receiverType, "this");
-        funcCtx->ns->addDef(thisDef.get());
+        funcCtx->addDef(thisDef.get());
     }
 
     f.setArgs(args);
@@ -1071,7 +1195,7 @@ namespace {
                          new LocalNamespace(objClass, objClass->name),
                          context.compileNS.get()
                          );
-        localCtx.ns->addDef(new ArgDef(objClass, "this"));
+        localCtx.addDef(new ArgDef(objClass, "this"));
 
         FuncBuilder funcBuilder(localCtx,
                                 FuncDef::method | FuncDef::virtualized,
@@ -1081,7 +1205,9 @@ namespace {
                                 );
 
         // if this is an override, do the wrapping.
-        FuncDefPtr override = objClass->lookUpNoArgs("oper class");
+        FuncDefPtr override = context.lookUpNoArgs("oper class", true, 
+                                                   objClass
+                                                   );
         if (override) {
             wrapOverride(objClass, BFuncDefPtr::arcast(override), funcBuilder);
         } else {
@@ -1093,7 +1219,7 @@ namespace {
         }
 
         funcBuilder.finish(false);
-        objClass->addDef(funcBuilder.funcDef.get());
+        context.addDef(funcBuilder.funcDef.get(), objClass);
 
         BasicBlock *block = BasicBlock::Create(getGlobalContext(),
                                                "oper class",
@@ -1346,7 +1472,7 @@ VarDefPtr LLVMBuilder::emitVarDef(Context &context, TypeDef *type,
                                    // provided or the global will be 
                                    // treated as an extern.
                                    Constant::getNullValue(tp->rep),
-                                   name
+                                   module->getModuleIdentifier()+":"+name
                                    );
             varDefImpl = new BGlobalVarDefImpl(gvar);
             break;
@@ -1495,7 +1621,7 @@ ResultExprPtr LLVMBuilder::emitFieldAssign(Context &context,
                                         aggregateRep,
                                         index,
                                         lastValue,
-                                        block
+                                        builder.GetInsertBlock()
                                         );
 
         // store it
@@ -1526,7 +1652,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     gd->classType = classType = new BTypeDef(0, "Class", classTypePtrRep);
     classType->type = classType;
     classType->meta = classType;
-    context.ns->addDef(classType);
+    context.addDef(classType);
 
     // some tools for creating meta-classes
     BTypeDefPtr metaType;           // storage for meta-types
@@ -1536,7 +1662,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                            "void",
                                            Type::getVoidTy(lctx)
                                            );
-    context.ns->addDef(voidType);
+    context.addDef(voidType);
 
     BTypeDef *voidptrType;
     llvmVoidPtrType = 
@@ -1545,7 +1671,8 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                                  "voidptr",
                                                  llvmVoidPtrType
                                                  );
-    context.ns->addDef(voidptrType);
+    voidptrType->defaultInitializer = new NullConst(voidptrType);
+    context.addDef(voidptrType);
     
     llvm::Type *llvmBytePtrType = 
         PointerType::getUnqual(Type::getInt8Ty(lctx));
@@ -1555,8 +1682,9 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                                  llvmBytePtrType
                                                  );
     byteptrType->defaultInitializer = createStrConst(context, "");
-    byteptrType->addDef(
-        new VoidPtrOpDef(context.construct->voidptrType.get())
+    context.addDef(
+        new VoidPtrOpDef(context.construct->voidptrType.get()),
+        byteptrType
     );
     FuncDefPtr funcDef =
         new GeneralOpDef<UnsafeCastCall>(byteptrType, FuncDef::noFlags,
@@ -1564,8 +1692,8 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                          1
                                          );
     funcDef->args[0] = new ArgDef(voidptrType, "val");
-    byteptrType->addDef(funcDef.get());
-    context.ns->addDef(byteptrType);
+    context.addDef(funcDef.get(), byteptrType);
+    context.addDef(byteptrType);
     
     const Type *llvmBoolType = IntegerType::getInt1Ty(lctx);
     BTypeDef *boolType;
@@ -1574,7 +1702,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                            llvmBoolType
                                            );
     gd->boolType->defaultInitializer = new BIntConst(boolType, (int64_t)0);
-    context.ns->addDef(boolType);
+    context.addDef(boolType);
     
     BTypeDef *byteType = createIntPrimType(context, Type::getInt8Ty(lctx),
                                            "byte"
@@ -1632,215 +1760,215 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     }
 
     // create integer operations
-    context.ns->addDef(new AddOpDef(byteType));
-    context.ns->addDef(new SubOpDef(byteType));
-    context.ns->addDef(new MulOpDef(byteType));
-    context.ns->addDef(new SDivOpDef(byteType));
-    context.ns->addDef(new SRemOpDef(byteType));
-    context.ns->addDef(new ICmpEQOpDef(byteType, boolType));
-    context.ns->addDef(new ICmpNEOpDef(byteType, boolType));
-    context.ns->addDef(new ICmpSGTOpDef(byteType, boolType));
-    context.ns->addDef(new ICmpSLTOpDef(byteType, boolType));
-    context.ns->addDef(new ICmpSGEOpDef(byteType, boolType));
-    context.ns->addDef(new ICmpSLEOpDef(byteType, boolType));
-    context.ns->addDef(new NegOpDef(byteType, "oper -"));
-    context.ns->addDef(new BitNotOpDef(byteType, "oper ~"));
-    context.ns->addDef(new OrOpDef(byteType));
-    context.ns->addDef(new AndOpDef(byteType));
-    context.ns->addDef(new XorOpDef(byteType));
-    context.ns->addDef(new ShlOpDef(byteType));
-    context.ns->addDef(new LShrOpDef(byteType));
+    context.addDef(new AddOpDef(byteType));
+    context.addDef(new SubOpDef(byteType));
+    context.addDef(new MulOpDef(byteType));
+    context.addDef(new SDivOpDef(byteType));
+    context.addDef(new SRemOpDef(byteType));
+    context.addDef(new ICmpEQOpDef(byteType, boolType));
+    context.addDef(new ICmpNEOpDef(byteType, boolType));
+    context.addDef(new ICmpSGTOpDef(byteType, boolType));
+    context.addDef(new ICmpSLTOpDef(byteType, boolType));
+    context.addDef(new ICmpSGEOpDef(byteType, boolType));
+    context.addDef(new ICmpSLEOpDef(byteType, boolType));
+    context.addDef(new NegOpDef(byteType, "oper -"));
+    context.addDef(new BitNotOpDef(byteType, "oper ~"));
+    context.addDef(new OrOpDef(byteType));
+    context.addDef(new AndOpDef(byteType));
+    context.addDef(new XorOpDef(byteType));
+    context.addDef(new ShlOpDef(byteType));
+    context.addDef(new LShrOpDef(byteType));
 
-    context.ns->addDef(new AddOpDef(uint32Type));
-    context.ns->addDef(new SubOpDef(uint32Type));
-    context.ns->addDef(new MulOpDef(uint32Type));
-    context.ns->addDef(new UDivOpDef(uint32Type));
-    context.ns->addDef(new URemOpDef(uint32Type));
-    context.ns->addDef(new ICmpEQOpDef(uint32Type, boolType));
-    context.ns->addDef(new ICmpNEOpDef(uint32Type, boolType));
-    context.ns->addDef(new ICmpUGTOpDef(uint32Type, boolType));
-    context.ns->addDef(new ICmpULTOpDef(uint32Type, boolType));
-    context.ns->addDef(new ICmpUGEOpDef(uint32Type, boolType));
-    context.ns->addDef(new ICmpULEOpDef(uint32Type, boolType));
-    context.ns->addDef(new NegOpDef(uint32Type, "oper -"));
-    context.ns->addDef(new BitNotOpDef(uint32Type, "oper ~"));
-    context.ns->addDef(new OrOpDef(uint32Type));
-    context.ns->addDef(new AndOpDef(uint32Type));
-    context.ns->addDef(new XorOpDef(uint32Type));
-    context.ns->addDef(new ShlOpDef(uint32Type));
-    context.ns->addDef(new LShrOpDef(uint32Type));
+    context.addDef(new AddOpDef(uint32Type));
+    context.addDef(new SubOpDef(uint32Type));
+    context.addDef(new MulOpDef(uint32Type));
+    context.addDef(new UDivOpDef(uint32Type));
+    context.addDef(new URemOpDef(uint32Type));
+    context.addDef(new ICmpEQOpDef(uint32Type, boolType));
+    context.addDef(new ICmpNEOpDef(uint32Type, boolType));
+    context.addDef(new ICmpUGTOpDef(uint32Type, boolType));
+    context.addDef(new ICmpULTOpDef(uint32Type, boolType));
+    context.addDef(new ICmpUGEOpDef(uint32Type, boolType));
+    context.addDef(new ICmpULEOpDef(uint32Type, boolType));
+    context.addDef(new NegOpDef(uint32Type, "oper -"));
+    context.addDef(new BitNotOpDef(uint32Type, "oper ~"));
+    context.addDef(new OrOpDef(uint32Type));
+    context.addDef(new AndOpDef(uint32Type));
+    context.addDef(new XorOpDef(uint32Type));
+    context.addDef(new ShlOpDef(uint32Type));
+    context.addDef(new LShrOpDef(uint32Type));
 
-    context.ns->addDef(new AddOpDef(int32Type));
-    context.ns->addDef(new SubOpDef(int32Type));
-    context.ns->addDef(new MulOpDef(int32Type));
-    context.ns->addDef(new SDivOpDef(int32Type));
-    context.ns->addDef(new SRemOpDef(int32Type));
-    context.ns->addDef(new ICmpEQOpDef(int32Type, boolType));
-    context.ns->addDef(new ICmpNEOpDef(int32Type, boolType));
-    context.ns->addDef(new ICmpSGTOpDef(int32Type, boolType));
-    context.ns->addDef(new ICmpSLTOpDef(int32Type, boolType));
-    context.ns->addDef(new ICmpSGEOpDef(int32Type, boolType));
-    context.ns->addDef(new ICmpSLEOpDef(int32Type, boolType));
-    context.ns->addDef(new NegOpDef(int32Type, "oper -"));
-    context.ns->addDef(new BitNotOpDef(int32Type, "oper ~"));
-    context.ns->addDef(new OrOpDef(int32Type));
-    context.ns->addDef(new AndOpDef(int32Type));
-    context.ns->addDef(new XorOpDef(int32Type));
-    context.ns->addDef(new ShlOpDef(int32Type));
-    context.ns->addDef(new AShrOpDef(int32Type));
+    context.addDef(new AddOpDef(int32Type));
+    context.addDef(new SubOpDef(int32Type));
+    context.addDef(new MulOpDef(int32Type));
+    context.addDef(new SDivOpDef(int32Type));
+    context.addDef(new SRemOpDef(int32Type));
+    context.addDef(new ICmpEQOpDef(int32Type, boolType));
+    context.addDef(new ICmpNEOpDef(int32Type, boolType));
+    context.addDef(new ICmpSGTOpDef(int32Type, boolType));
+    context.addDef(new ICmpSLTOpDef(int32Type, boolType));
+    context.addDef(new ICmpSGEOpDef(int32Type, boolType));
+    context.addDef(new ICmpSLEOpDef(int32Type, boolType));
+    context.addDef(new NegOpDef(int32Type, "oper -"));
+    context.addDef(new BitNotOpDef(int32Type, "oper ~"));
+    context.addDef(new OrOpDef(int32Type));
+    context.addDef(new AndOpDef(int32Type));
+    context.addDef(new XorOpDef(int32Type));
+    context.addDef(new ShlOpDef(int32Type));
+    context.addDef(new AShrOpDef(int32Type));
 
-    context.ns->addDef(new AddOpDef(uint64Type));
-    context.ns->addDef(new SubOpDef(uint64Type));
-    context.ns->addDef(new MulOpDef(uint64Type));
-    context.ns->addDef(new UDivOpDef(uint64Type));
-    context.ns->addDef(new URemOpDef(uint64Type));
-    context.ns->addDef(new ICmpEQOpDef(uint64Type, boolType));
-    context.ns->addDef(new ICmpNEOpDef(uint64Type, boolType));
-    context.ns->addDef(new ICmpUGTOpDef(uint64Type, boolType));
-    context.ns->addDef(new ICmpULTOpDef(uint64Type, boolType));
-    context.ns->addDef(new ICmpUGEOpDef(uint64Type, boolType));
-    context.ns->addDef(new ICmpULEOpDef(uint64Type, boolType));
-    context.ns->addDef(new NegOpDef(uint64Type, "oper -"));
-    context.ns->addDef(new BitNotOpDef(uint64Type, "oper ~"));
-    context.ns->addDef(new OrOpDef(uint64Type));
-    context.ns->addDef(new AndOpDef(uint64Type));
-    context.ns->addDef(new XorOpDef(uint64Type));
-    context.ns->addDef(new ShlOpDef(uint64Type));
-    context.ns->addDef(new LShrOpDef(uint64Type));
+    context.addDef(new AddOpDef(uint64Type));
+    context.addDef(new SubOpDef(uint64Type));
+    context.addDef(new MulOpDef(uint64Type));
+    context.addDef(new UDivOpDef(uint64Type));
+    context.addDef(new URemOpDef(uint64Type));
+    context.addDef(new ICmpEQOpDef(uint64Type, boolType));
+    context.addDef(new ICmpNEOpDef(uint64Type, boolType));
+    context.addDef(new ICmpUGTOpDef(uint64Type, boolType));
+    context.addDef(new ICmpULTOpDef(uint64Type, boolType));
+    context.addDef(new ICmpUGEOpDef(uint64Type, boolType));
+    context.addDef(new ICmpULEOpDef(uint64Type, boolType));
+    context.addDef(new NegOpDef(uint64Type, "oper -"));
+    context.addDef(new BitNotOpDef(uint64Type, "oper ~"));
+    context.addDef(new OrOpDef(uint64Type));
+    context.addDef(new AndOpDef(uint64Type));
+    context.addDef(new XorOpDef(uint64Type));
+    context.addDef(new ShlOpDef(uint64Type));
+    context.addDef(new LShrOpDef(uint64Type));
 
-    context.ns->addDef(new AddOpDef(int64Type));
-    context.ns->addDef(new SubOpDef(int64Type));
-    context.ns->addDef(new MulOpDef(int64Type));
-    context.ns->addDef(new SDivOpDef(int64Type));
-    context.ns->addDef(new SRemOpDef(int64Type));
-    context.ns->addDef(new ICmpEQOpDef(int64Type, boolType));
-    context.ns->addDef(new ICmpNEOpDef(int64Type, boolType));
-    context.ns->addDef(new ICmpSGTOpDef(int64Type, boolType));
-    context.ns->addDef(new ICmpSLTOpDef(int64Type, boolType));
-    context.ns->addDef(new ICmpSGEOpDef(int64Type, boolType));
-    context.ns->addDef(new ICmpSLEOpDef(int64Type, boolType));
-    context.ns->addDef(new NegOpDef(int64Type, "oper -"));
-    context.ns->addDef(new BitNotOpDef(int64Type, "oper ~"));
-    context.ns->addDef(new OrOpDef(int64Type));
-    context.ns->addDef(new AndOpDef(int64Type));
-    context.ns->addDef(new XorOpDef(int64Type));
-    context.ns->addDef(new ShlOpDef(int64Type));
-    context.ns->addDef(new AShrOpDef(int64Type));
+    context.addDef(new AddOpDef(int64Type));
+    context.addDef(new SubOpDef(int64Type));
+    context.addDef(new MulOpDef(int64Type));
+    context.addDef(new SDivOpDef(int64Type));
+    context.addDef(new SRemOpDef(int64Type));
+    context.addDef(new ICmpEQOpDef(int64Type, boolType));
+    context.addDef(new ICmpNEOpDef(int64Type, boolType));
+    context.addDef(new ICmpSGTOpDef(int64Type, boolType));
+    context.addDef(new ICmpSLTOpDef(int64Type, boolType));
+    context.addDef(new ICmpSGEOpDef(int64Type, boolType));
+    context.addDef(new ICmpSLEOpDef(int64Type, boolType));
+    context.addDef(new NegOpDef(int64Type, "oper -"));
+    context.addDef(new BitNotOpDef(int64Type, "oper ~"));
+    context.addDef(new OrOpDef(int64Type));
+    context.addDef(new AndOpDef(int64Type));
+    context.addDef(new XorOpDef(int64Type));
+    context.addDef(new ShlOpDef(int64Type));
+    context.addDef(new AShrOpDef(int64Type));
 
     // float operations
-    context.ns->addDef(new FAddOpDef(float32Type));
-    context.ns->addDef(new FSubOpDef(float32Type));
-    context.ns->addDef(new FMulOpDef(float32Type));
-    context.ns->addDef(new FDivOpDef(float32Type));
-    context.ns->addDef(new FRemOpDef(float32Type));
-    context.ns->addDef(new FCmpOEQOpDef(float32Type, boolType));
-    context.ns->addDef(new FCmpONEOpDef(float32Type, boolType));
-    context.ns->addDef(new FCmpOGTOpDef(float32Type, boolType));
-    context.ns->addDef(new FCmpOLTOpDef(float32Type, boolType));
-    context.ns->addDef(new FCmpOGEOpDef(float32Type, boolType));
-    context.ns->addDef(new FCmpOLEOpDef(float32Type, boolType));
-    context.ns->addDef(new FNegOpDef(float32Type, "oper -"));
+    context.addDef(new FAddOpDef(float32Type));
+    context.addDef(new FSubOpDef(float32Type));
+    context.addDef(new FMulOpDef(float32Type));
+    context.addDef(new FDivOpDef(float32Type));
+    context.addDef(new FRemOpDef(float32Type));
+    context.addDef(new FCmpOEQOpDef(float32Type, boolType));
+    context.addDef(new FCmpONEOpDef(float32Type, boolType));
+    context.addDef(new FCmpOGTOpDef(float32Type, boolType));
+    context.addDef(new FCmpOLTOpDef(float32Type, boolType));
+    context.addDef(new FCmpOGEOpDef(float32Type, boolType));
+    context.addDef(new FCmpOLEOpDef(float32Type, boolType));
+    context.addDef(new FNegOpDef(float32Type, "oper -"));
 
-    context.ns->addDef(new FAddOpDef(float64Type));
-    context.ns->addDef(new FSubOpDef(float64Type));
-    context.ns->addDef(new FMulOpDef(float64Type));
-    context.ns->addDef(new FDivOpDef(float64Type));
-    context.ns->addDef(new FRemOpDef(float64Type));
-    context.ns->addDef(new FCmpOEQOpDef(float64Type, boolType));
-    context.ns->addDef(new FCmpONEOpDef(float64Type, boolType));
-    context.ns->addDef(new FCmpOGTOpDef(float64Type, boolType));
-    context.ns->addDef(new FCmpOLTOpDef(float64Type, boolType));
-    context.ns->addDef(new FCmpOGEOpDef(float64Type, boolType));
-    context.ns->addDef(new FCmpOLEOpDef(float64Type, boolType));
-    context.ns->addDef(new FNegOpDef(float64Type, "oper -"));
+    context.addDef(new FAddOpDef(float64Type));
+    context.addDef(new FSubOpDef(float64Type));
+    context.addDef(new FMulOpDef(float64Type));
+    context.addDef(new FDivOpDef(float64Type));
+    context.addDef(new FRemOpDef(float64Type));
+    context.addDef(new FCmpOEQOpDef(float64Type, boolType));
+    context.addDef(new FCmpONEOpDef(float64Type, boolType));
+    context.addDef(new FCmpOGTOpDef(float64Type, boolType));
+    context.addDef(new FCmpOLTOpDef(float64Type, boolType));
+    context.addDef(new FCmpOGEOpDef(float64Type, boolType));
+    context.addDef(new FCmpOLEOpDef(float64Type, boolType));
+    context.addDef(new FNegOpDef(float64Type, "oper -"));
 
     // boolean logic
-    context.ns->addDef(new LogicAndOpDef(boolType, boolType));
-    context.ns->addDef(new LogicOrOpDef(boolType, boolType));
+    context.addDef(new LogicAndOpDef(boolType, boolType));
+    context.addDef(new LogicOrOpDef(boolType, boolType));
     
     // implicit conversions (no loss of precision)
-    byteType->addDef(new ZExtOpDef(int32Type, "oper to int32"));
-    byteType->addDef(new ZExtOpDef(int64Type, "oper to int64"));
-    byteType->addDef(new ZExtOpDef(uint32Type, "oper to uint32"));
-    byteType->addDef(new ZExtOpDef(uint64Type, "oper to uint64"));
-    byteType->addDef(new UIToFPOpDef(float32Type, "oper to float32"));
-    byteType->addDef(new UIToFPOpDef(float64Type, "oper to float64"));
-    int32Type->addDef(new SExtOpDef(int64Type, "oper to int64"));
-    int32Type->addDef(new ZExtOpDef(uint64Type, "oper to uint64"));
-    int32Type->addDef(new SIToFPOpDef(float64Type, "oper to float64"));
-    uint32Type->addDef(new ZExtOpDef(uint64Type, "oper to uint64"));
-    uint32Type->addDef(new ZExtOpDef(int64Type, "oper to int64"));
-    uint32Type->addDef(new UIToFPOpDef(float64Type, "oper to float64"));
-    float32Type->addDef(new FPExtOpDef(float64Type, "oper to float64"));
+    context.addDef(new ZExtOpDef(int32Type, "oper to int32"), byteType);
+    context.addDef(new ZExtOpDef(int64Type, "oper to int64"), byteType);
+    context.addDef(new ZExtOpDef(uint32Type, "oper to uint32"), byteType);
+    context.addDef(new ZExtOpDef(uint64Type, "oper to uint64"), byteType);
+    context.addDef(new UIToFPOpDef(float32Type, "oper to float32"), byteType);
+    context.addDef(new UIToFPOpDef(float64Type, "oper to float64"), byteType);
+    context.addDef(new SExtOpDef(int64Type, "oper to int64"), int32Type);
+    context.addDef(new ZExtOpDef(uint64Type, "oper to uint64"), int32Type);
+    context.addDef(new SIToFPOpDef(float64Type, "oper to float64"), int32Type);
+    context.addDef(new ZExtOpDef(uint64Type, "oper to uint64"), uint32Type);
+    context.addDef(new ZExtOpDef(int64Type, "oper to int64"), uint32Type);
+    context.addDef(new UIToFPOpDef(float64Type, "oper to float64"), uint32Type);
+    context.addDef(new FPExtOpDef(float64Type, "oper to float64"), float32Type);
 
     // add the increment and decrement operators
-    byteType->addDef(new PreIncrIntOpDef(byteType, "oper ++x"));
-    int32Type->addDef(new PreIncrIntOpDef(int32Type, "oper ++x"));
-    uint32Type->addDef(new PreIncrIntOpDef(uint32Type, "oper ++x"));
-    int64Type->addDef(new PreIncrIntOpDef(int64Type, "oper ++x"));
-    uint64Type->addDef(new PreIncrIntOpDef(uint64Type, "oper ++x"));
-    byteType->addDef(new PreDecrIntOpDef(byteType, "oper --x"));
-    int32Type->addDef(new PreDecrIntOpDef(int32Type, "oper --x"));
-    uint32Type->addDef(new PreDecrIntOpDef(uint32Type, "oper --x"));
-    int64Type->addDef(new PreDecrIntOpDef(int64Type, "oper --x"));
-    uint64Type->addDef(new PreDecrIntOpDef(uint64Type, "oper --x"));
-    byteType->addDef(new PostIncrIntOpDef(byteType, "oper x++"));
-    int32Type->addDef(new PostIncrIntOpDef(int32Type, "oper x++"));
-    uint32Type->addDef(new PostIncrIntOpDef(uint32Type, "oper x++"));
-    int64Type->addDef(new PostIncrIntOpDef(int64Type, "oper x++"));
-    uint64Type->addDef(new PostIncrIntOpDef(uint64Type, "oper x++"));
-    byteType->addDef(new PostDecrIntOpDef(byteType, "oper x--"));
-    int32Type->addDef(new PostDecrIntOpDef(int32Type, "oper x--"));
-    uint32Type->addDef(new PostDecrIntOpDef(uint32Type, "oper x--"));
-    int64Type->addDef(new PostDecrIntOpDef(int64Type, "oper x--"));
-    uint64Type->addDef(new PostDecrIntOpDef(uint64Type, "oper x--"));
+    context.addDef(new PreIncrIntOpDef(byteType, "oper ++x"), byteType);
+    context.addDef(new PreIncrIntOpDef(int32Type, "oper ++x"), int32Type);
+    context.addDef(new PreIncrIntOpDef(uint32Type, "oper ++x"), uint32Type);
+    context.addDef(new PreIncrIntOpDef(int64Type, "oper ++x"), int64Type);
+    context.addDef(new PreIncrIntOpDef(uint64Type, "oper ++x"), uint64Type);
+    context.addDef(new PreDecrIntOpDef(byteType, "oper --x"), byteType);
+    context.addDef(new PreDecrIntOpDef(int32Type, "oper --x"), int32Type);
+    context.addDef(new PreDecrIntOpDef(uint32Type, "oper --x"), uint32Type);
+    context.addDef(new PreDecrIntOpDef(int64Type, "oper --x"), int64Type);
+    context.addDef(new PreDecrIntOpDef(uint64Type, "oper --x"), uint64Type);
+    context.addDef(new PostIncrIntOpDef(byteType, "oper x++"), byteType);
+    context.addDef(new PostIncrIntOpDef(int32Type, "oper x++"), int32Type);
+    context.addDef(new PostIncrIntOpDef(uint32Type, "oper x++"), uint32Type);
+    context.addDef(new PostIncrIntOpDef(int64Type, "oper x++"), int64Type);
+    context.addDef(new PostIncrIntOpDef(uint64Type, "oper x++"), uint64Type);
+    context.addDef(new PostDecrIntOpDef(byteType, "oper x--"), byteType);
+    context.addDef(new PostDecrIntOpDef(int32Type, "oper x--"), int32Type);
+    context.addDef(new PostDecrIntOpDef(uint32Type, "oper x--"), uint32Type);
+    context.addDef(new PostDecrIntOpDef(int64Type, "oper x--"), int64Type);
+    context.addDef(new PostDecrIntOpDef(uint64Type, "oper x--"), uint64Type);
 
     // explicit no-op construction
-    addNopNew(int64Type);
-    addNopNew(uint64Type);
-    addNopNew(int32Type);
-    addNopNew(uint32Type);
-    addNopNew(byteType);
-    addNopNew(float32Type);
-    addNopNew(float64Type);
+    addNopNew(context, int64Type);
+    addNopNew(context, uint64Type);
+    addNopNew(context, int32Type);
+    addNopNew(context, uint32Type);
+    addNopNew(context, byteType);
+    addNopNew(context, float32Type);
+    addNopNew(context, float64Type);
 
     // explicit (loss of precision)
-    addExplicitTruncate(int64Type, uint64Type);
-    addExplicitTruncate(int64Type, int32Type);
-    addExplicitTruncate(int64Type, uint32Type);
-    addExplicitTruncate(int64Type, byteType);
-    addExplicitTruncate(uint64Type, int64Type);
-    addExplicitTruncate(uint64Type, int32Type);
-    addExplicitTruncate(uint64Type, uint32Type);
-    addExplicitTruncate(uint64Type, byteType);
-    addExplicitTruncate(int32Type, byteType);
-    addExplicitTruncate(int32Type, uint32Type);
-    addExplicitTruncate(int32Type, uint32Type);
-    addExplicitTruncate(uint32Type, byteType);
-    addExplicitTruncate(uint32Type, int32Type);
+    addExplicitTruncate(context, int64Type, uint64Type);
+    addExplicitTruncate(context, int64Type, int32Type);
+    addExplicitTruncate(context, int64Type, uint32Type);
+    addExplicitTruncate(context, int64Type, byteType);
+    addExplicitTruncate(context, uint64Type, int64Type);
+    addExplicitTruncate(context, uint64Type, int32Type);
+    addExplicitTruncate(context, uint64Type, uint32Type);
+    addExplicitTruncate(context, uint64Type, byteType);
+    addExplicitTruncate(context, int32Type, byteType);
+    addExplicitTruncate(context, int32Type, uint32Type);
+    addExplicitTruncate(context, int32Type, uint32Type);
+    addExplicitTruncate(context, uint32Type, byteType);
+    addExplicitTruncate(context, uint32Type, int32Type);
 
-    addExplicitFPTruncate<FPTruncOpCall>(float64Type, float32Type);
-    addExplicitFPTruncate<FPToUIOpCall>(float32Type, byteType);
-    addExplicitFPTruncate<FPToSIOpCall>(float32Type, int32Type);
-    addExplicitFPTruncate<FPToUIOpCall>(float32Type, uint32Type);
-    addExplicitFPTruncate<FPToSIOpCall>(float32Type, int64Type);
-    addExplicitFPTruncate<FPToUIOpCall>(float32Type, uint64Type);
-    addExplicitFPTruncate<FPToUIOpCall>(float64Type, byteType);
-    addExplicitFPTruncate<FPToSIOpCall>(float64Type, int32Type);
-    addExplicitFPTruncate<FPToUIOpCall>(float64Type, uint32Type);
-    addExplicitFPTruncate<FPToSIOpCall>(float64Type, int64Type);
-    addExplicitFPTruncate<FPToUIOpCall>(float64Type, uint64Type);
+    addExplicitFPTruncate<FPTruncOpCall>(context, float64Type, float32Type);
+    addExplicitFPTruncate<FPToUIOpCall>(context, float32Type, byteType);
+    addExplicitFPTruncate<FPToSIOpCall>(context, float32Type, int32Type);
+    addExplicitFPTruncate<FPToUIOpCall>(context, float32Type, uint32Type);
+    addExplicitFPTruncate<FPToSIOpCall>(context, float32Type, int64Type);
+    addExplicitFPTruncate<FPToUIOpCall>(context, float32Type, uint64Type);
+    addExplicitFPTruncate<FPToUIOpCall>(context, float64Type, byteType);
+    addExplicitFPTruncate<FPToSIOpCall>(context, float64Type, int32Type);
+    addExplicitFPTruncate<FPToUIOpCall>(context, float64Type, uint32Type);
+    addExplicitFPTruncate<FPToSIOpCall>(context, float64Type, int64Type);
+    addExplicitFPTruncate<FPToUIOpCall>(context, float64Type, uint64Type);
 
     // create the array generic
     TypeDefPtr arrayType = new ArrayTypeDef(context.construct->classType.get(),
                                             "array", 
                                             0
                                             );
-    context.ns->addDef(arrayType.get());
+    context.addDef(arrayType.get());
 
     // now that we have byteptr and array and all of the integer types, we can
     // initialize the body of Class.
-    context.ns->addDef(new IsOpDef(classType, boolType));
+    context.addDef(new IsOpDef(classType, boolType));
 
     finishClassType(context, classType);
     
@@ -1862,10 +1990,10 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     createClassImpl(context, overloadDef.get());
         
     // Give it a context and an "oper to voidptr" method.
-    overloadDef->addDef(
-        new VoidPtrOpDef(context.construct->voidptrType.get())
+    context.addDef(
+        new VoidPtrOpDef(context.construct->voidptrType.get()),
+        overloadDef.get()
     );
-    OverloadDef::overloadType = gd->overloadType = overloadDef;
     
     // create an empty structure type and its pointer for VTableBase 
     // Actual type is {}** (another layer of pointer indirection) because 
@@ -1883,7 +2011,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     vtableBaseType->hasVTable = true;
     createClassImpl(context, vtableBaseType);
     metaType->meta = vtableBaseType;
-    context.ns->addDef(vtableBaseType);
+    context.addDef(vtableBaseType);
     createOperClassFunc(context, vtableBaseType, metaType.get());
 
     // build VTableBase's vtable
@@ -1894,11 +2022,11 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     vtableBuilder.emit(vtableBaseType);
 
     // pointer equality check (to allow checking for None)
-    context.ns->addDef(new IsOpDef(voidptrType, boolType));
-    context.ns->addDef(new IsOpDef(byteptrType, boolType));
+    context.addDef(new IsOpDef(voidptrType, boolType));
+    context.addDef(new IsOpDef(byteptrType, boolType));
     
     // boolean not
-    context.ns->addDef(new BitNotOpDef(boolType, "oper !"));
+    context.addDef(new BitNotOpDef(boolType, "oper !"));
     
     // byteptr array indexing
     addArrayMethods(context, byteptrType, byteType);    
@@ -1911,15 +2039,20 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
 
 }
 
-void LLVMBuilder::loadSharedLibrary(const string &name,
-                                    const vector<string> &symbols,
-                                    Context &context,
-                                    Namespace *ns
-                                    ) {
+void *LLVMBuilder::loadSharedLibrary(const std::string &name) {
     // leak the handle so the library stays mapped for the life of the process.
     void *handle = dlopen(name.c_str(), RTLD_LAZY|RTLD_GLOBAL);
     if (!handle)
         throw spug::Exception(dlerror());
+    return handle;
+}
+
+void LLVMBuilder::importSharedLibrary(const string &name,
+                                    const vector<string> &symbols,
+                                    Context &context,
+                                    Namespace *ns
+                                    ) {
+    void *handle = loadSharedLibrary(name);
     for (vector<string>::const_iterator iter = symbols.begin();
          iter != symbols.end();
          ++iter
@@ -1946,12 +2079,6 @@ void LLVMBuilder::setArgv(int newArgc, char **newArgv) {
     argv = newArgv;
 }
 
-void LLVMBuilder::dump() {
-    PassManager passMan;
-    passMan.add(llvm::createPrintModulePass(&llvm::outs()));
-    passMan.run(*module);
-}
-
 void LLVMBuilder::emitMemVarRef(Context &context, Value *val) {
     lastValue = builder.CreateLoad(val);
 }
@@ -1965,15 +2092,9 @@ void LLVMBuilder::emitVTableInit(Context &context, TypeDef *typeDef) {
     BTypeDef *vtableBaseType = 
         BTypeDefPtr::arcast(context.construct->vtableBaseType);
     PlaceholderInstruction *vtableInit =
-        new IncompleteVTableInit(btype, lastValue, vtableBaseType, block);
+        new IncompleteVTableInit(btype, lastValue, vtableBaseType, 
+                                 builder.GetInsertBlock()
+                                 );
     // store it
     btype->addPlaceholder(vtableInit);
-}
-
-void LLVMBuilder::setDumpMode(bool dump) {
-    dumpMode = dump;
-}
-
-void LLVMBuilder::setDebug(bool debug) {
-    debugMode = debug;
 }
