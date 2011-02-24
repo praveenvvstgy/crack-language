@@ -71,17 +71,18 @@ void Func::finish() {
                                     funcPtr,
                                     (symbolName.empty())?0:symbolName.c_str()
                                     );
-        context->ns->addDef(funcDef.get());
+        context->addDef(funcDef.get());
     }
 
     if (flags & constructor) {
         TypeDefPtr myClass = TypeDefPtr::arcast(context->ns);
         ContextPtr funcContext = context->createSubContext(Context::local);
+        funcContext->toplevel = true;
     
         // create the "this" variable
         ArgDefPtr thisDef =
             context->builder.createArgDef(myClass.get(), "this");
-        funcContext->ns->addDef(thisDef.get());
+        funcContext->addDef(thisDef.get());
         VarRefPtr thisRef = new VarRef(thisDef.get());
         
         // emit the function
@@ -118,7 +119,7 @@ void Func::finish() {
         // close it off
         funcContext->builder.emitReturn(*funcContext, 0);
         funcContext->builder.emitEndFunc(*funcContext, newFunc.get());
-        myClass->addDef(newFunc.get());
+        context->addDef(newFunc.get(), myClass.get());
 
         myClass->createNewFunc(*context, newFunc.get());
     }

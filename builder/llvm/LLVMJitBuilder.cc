@@ -7,6 +7,7 @@
 #include "model/Context.h"
 #include "FuncBuilder.h"
 #include "Utils.h"
+#include "BBuilderContextData.h"
 
 #include <llvm/LLVMContext.h>
 #include <llvm/LinkAllPasses.h>
@@ -15,6 +16,8 @@
 #include <llvm/Target/TargetData.h>
 #include <llvm/Target/TargetSelect.h>
 #include <llvm/Target/TargetOptions.h>
+#include <llvm/Analysis/Verifier.h>
+#include <llvm/Assembly/PrintModulePass.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/JIT.h>  // link in the JIT
 #include <llvm/Module.h>
@@ -33,7 +36,7 @@ void LLVMJitBuilder::engineBindModule(ModuleDef *moduleDef) {
 void LLVMJitBuilder::engineFinishModule(ModuleDef *moduleDef) {
     // XXX right now, only checking for > 0, later perhaps we can
     // run specific optimizations at different levels
-    if (optimizeLevel) {
+    if (options->optimizeLevel) {
         // optimize
         llvm::PassManager passMan;
 
@@ -117,29 +120,30 @@ BuilderPtr LLVMJitBuilder::createChildBuilder() {
     LLVMJitBuilder *result = new LLVMJitBuilder();
     result->rootBuilder = rootBuilder ? rootBuilder : this;
     result->llvmVoidPtrType = llvmVoidPtrType;
-    result->dumpMode = dumpMode;
-    result->debugMode = debugMode;
+    result->options = options;
     return result;
 }
 
 ModuleDefPtr LLVMJitBuilder::createModule(Context &context,
-                                       const string &name
-                                       ) {
+                                          const string &name
+                                          ) {
 
     assert(!module);
     LLVMContext &lctx = getGlobalContext();
     module = new llvm::Module(name, lctx);
 
-    if (debugMode) {
+    if (options->debugMode) {
         debugInfo = new DebugInfo(module, name);
     }
+
+    // create a context data object
+    BBuilderContextData::get(&context);
 
     llvm::Constant *c =
         module->getOrInsertFunction("__main__", Type::getVoidTy(lctx), NULL);
     func = llvm::cast<llvm::Function>(c);
     func->setCallingConv(llvm::CallingConv::C);
-    block = BasicBlock::Create(lctx, "__main__", func);
-    builder.SetInsertPoint(block);
+    builder.SetInsertPoint(BasicBlock::Create(lctx, "__main__", func));
 
     // name some structs in this module
     BTypeDef *classType = BTypeDefPtr::arcast(context.construct->classType);
@@ -162,48 +166,6 @@ ModuleDefPtr LLVMJitBuilder::createModule(Context &context,
     BTypeDef *voidptrType =
         BTypeDefPtr::arcast(context.construct->voidptrType);
 
-    // create "int puts(String)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, int32Type, "puts",
-                      1
-                      );
-        f.addArg("text", byteptrType);
-        f.setSymbolName("puts");
-        f.finish();
-    }
-
-    // create "void printint(int32)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printint", 1);
-        f.addArg("val", int32Type);
-        f.setSymbolName("printint");
-        f.finish();
-    }
-
-    // create "void printint64(int64)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printint64", 1);
-        f.addArg("val", int64Type);
-        f.setSymbolName("printint64");
-        f.finish();
-    }
-
-    // create "void printuint64(int64)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printuint64", 1);
-        f.addArg("val", uint64Type);
-        f.setSymbolName("printuint64");
-        f.finish();
-    }
-
-    // create "void printfloat(float32)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "printfloat", 1);
-        f.addArg("val", float32Type);
-        f.setSymbolName("printfloat");
-        f.finish();
-    }
-
     // create "void *calloc(uint size)"
     {
         FuncBuilder f(context, FuncDef::noFlags, voidptrType, "calloc", 2);
@@ -212,14 +174,6 @@ ModuleDefPtr LLVMJitBuilder::createModule(Context &context,
         f.setSymbolName("calloc");
         f.finish();
         callocFunc = f.funcDef->getRep(*this);
-    }
-
-    // create "void __die(byteptr message)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidType, "__die", 1);
-        f.addArg("message", byteptrType);
-        f.setSymbolName("__die");
-        f.finish();
     }
 
     // create "array[byteptr] __getArgv()"
@@ -258,14 +212,18 @@ void LLVMJitBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
     builder.CreateRetVoid();
 
     // emit the cleanup function
+
+    // since the cleanups have to be emitted against the module context, clear 
+    // the unwind blocks so we generate them for the del function.
+    clearCachedCleanups(context);
+    
     Function *mainFunc = func;
     LLVMContext &lctx = getGlobalContext();
     llvm::Constant *c =
         module->getOrInsertFunction("__del__", Type::getVoidTy(lctx), NULL);
     func = llvm::cast<llvm::Function>(c);
     func->setCallingConv(llvm::CallingConv::C);
-    block = BasicBlock::Create(lctx, "__del__", func);
-    builder.SetInsertPoint(block);
+    builder.SetInsertPoint(BasicBlock::Create(lctx, "__del__", func));
     closeAllCleanupsStatic(context);
     builder.CreateRetVoid();
 
@@ -279,19 +237,27 @@ void LLVMJitBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
     // let jit or linker finish module before run/link
     engineFinishModule(moduleDef);
 
-    // store primitive functions
-    for (map<Function *, void *>::iterator iter = primFuncs.begin();
-         iter != primFuncs.end();
-         ++iter
-         )
-        addGlobalFuncMapping(iter->first, iter->second);
+    // store primitive functions from an extension
+    if (moduleDef->fromExtension) {
+        for (map<Function *, void *>::iterator iter = primFuncs.begin();
+        iter != primFuncs.end();
+        ++iter
+                )
+            addGlobalFuncMapping(iter->first, iter->second);
+    }
 
     if (debugInfo)
         delete debugInfo;
 
     // dump or run the module depending on the mode.
-    if (dumpMode)
+    if (options->dumpMode)
         dump();
     else
         run();
+}
+
+void LLVMJitBuilder::dump() {
+    PassManager passMan;
+    passMan.add(llvm::createPrintModulePass(&llvm::outs()));
+    passMan.run(*module);
 }
