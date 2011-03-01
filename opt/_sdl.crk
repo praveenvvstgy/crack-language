@@ -19,6 +19,8 @@
     @inject 'SDL_MouseMotionEvent *SDL_Event_GetMotion(SDL_Event *evt) { return &evt->motion; }\n';
     @inject 'uint SDL_MouseMotionEvent_GetX(SDL_MouseMotionEvent *evt) { return evt->x; }\n';
     @inject 'uint SDL_MouseMotionEvent_GetY(SDL_MouseMotionEvent *evt) { return evt->y; }\n';
+    @inject 'void *SDL_SetVideoMode_void(int width, int height, int bpp, uint32_t flags){ return (void *)SDL_SetVideoMode(height, width, bpp, flags);}'
+
     @crack_internal
 
     
@@ -53,7 +55,12 @@
                                  uint32 flags
                                  );
 
+    voidptr SDL_SetVideoMode_void(int width, int height, int bpp, 
+                                 uint32 flags
+                                 );
+
     class SDL_Event;
+    class SDL_Rect;
 
     SDL_Event SDL_EventNew();
     int SDL_Event_GetType(SDL_Event event);

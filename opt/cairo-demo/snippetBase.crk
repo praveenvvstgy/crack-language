@@ -1,0 +1,9 @@
+import crack.ext._cairo cairo_surface_t, cairo_t;
+
+class snippetClass:Object{
+   StaticString name;;
+   oper init(){}
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+   }
+}

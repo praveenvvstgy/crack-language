@@ -1,0 +1,96 @@
+import crack.math PI;
+import crack.lang CString;
+import snippetBase snippetClass;
+import crack.ext._cairo cairo_t, cairo_surface_t, cairo_set_line_width,
+                         cairo_arc, cairo_stroke, cairo_set_source_rgba,
+                         cairo_fill, cairo_line_to, cairo_move_to,
+                         cairo_curve_to, cairo_close_path,
+                         cairo_new_sub_path, cairo_set_source_rgb,
+                         cairo_fill_preserve, cairo_set_dash,
+                         cairo_rel_line_to, CAIRO_FILL_RULE_EVEN_ODD, 
+                         CAIRO_FILL_RULE_WINDING,cairo_rectangle,
+                         cairo_arc_negative, cairo_set_fill_rule,
+                         cairo_translate, cairo_pattern_t,
+                         cairo_pattern_create_radial, cairo_pattern_create_linear,
+                         cairo_pattern_add_color_stop_rgba,
+                         cairo_set_source, cairo_pattern_destroy;
+
+class fillStrokeClass:snippetClass{
+   oper init(){
+      name="fill_stroke";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      cairo_move_to (cr, 128.0, 25.6);
+      cairo_line_to (cr, 230.4, 230.4);
+      cairo_rel_line_to (cr, -102.4, 0.0);
+      cairo_curve_to (cr, 51.2, 230.4, 51.2, 128.0, 128.0, 128.0);
+      cairo_close_path (cr);
+
+      cairo_move_to (cr, 64.0, 25.6);
+      cairo_rel_line_to (cr, 51.2, 51.2);
+      cairo_rel_line_to (cr, -51.2, 51.2);
+      cairo_rel_line_to (cr, -51.2, -51.2);
+      cairo_close_path (cr);
+
+      cairo_set_line_width (cr, 10.0);
+      cairo_set_source_rgb (cr, 0, 0, 1);
+      cairo_fill_preserve (cr);
+      cairo_set_source_rgb (cr, 0, 0, 0);
+      cairo_stroke (cr);
+   }
+}
+
+class fillStyleClass:snippetClass{
+   oper init(){
+      name="fill_style";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      cairo_set_line_width (cr, 6);
+
+      cairo_rectangle (cr, 12, 12, 232, 70);
+      cairo_new_sub_path (cr); cairo_arc (cr, 64, 64, 40, 0, 2*PI);
+      cairo_new_sub_path (cr); cairo_arc_negative (cr, 192, 64, 40, 0, -2*PI);
+
+      cairo_set_fill_rule (cr, CAIRO_FILL_RULE_EVEN_ODD);
+      cairo_set_source_rgb (cr, 0, 0.7, 0); cairo_fill_preserve (cr);
+      cairo_set_source_rgb (cr, 0, 0, 0); cairo_stroke (cr);
+
+      cairo_translate (cr, 0, 128);
+      cairo_rectangle (cr, 12, 12, 232, 70);
+      cairo_new_sub_path (cr); cairo_arc (cr, 64, 64, 40, 0, 2*PI);
+      cairo_new_sub_path (cr); cairo_arc_negative (cr, 192, 64, 40, 0, -2*PI);
+
+      cairo_set_fill_rule (cr, CAIRO_FILL_RULE_WINDING);
+      cairo_set_source_rgb (cr, 0, 0, 0.9); cairo_fill_preserve (cr);
+      cairo_set_source_rgb (cr, 0, 0, 0); cairo_stroke (cr);   
+   }
+}
+
+class fillGradientClass:snippetClass{
+   oper init(){
+      name="fill_gradient";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      cairo_pattern_t pat;
+
+      pat = cairo_pattern_create_linear (0.0, 0.0,  0.0, 256.0);
+      cairo_pattern_add_color_stop_rgba (pat, 1, 0, 0, 0, 1);
+      cairo_pattern_add_color_stop_rgba (pat, 0, 1, 1, 1, 1);
+      cairo_rectangle (cr, 0, 0, 256, 256);
+      cairo_set_source (cr, pat);
+      cairo_fill (cr);
+      cairo_pattern_destroy (pat);
+
+      pat = cairo_pattern_create_radial (115.2, 102.4, 25.6,
+                                         102.4,  102.4, 128.0);
+      cairo_pattern_add_color_stop_rgba (pat, 0, 1, 1, 1, 1);
+      cairo_pattern_add_color_stop_rgba (pat, 1, 0, 0, 0, 1);
+      cairo_set_source (cr, pat);
+      cairo_arc (cr, 128.0, 128.0, 76.8, 0, 2 * PI);
+      cairo_fill (cr);
+      cairo_pattern_destroy (pat);
+   }
+}
