@@ -15,7 +15,7 @@
 
     ## An Array is a sequence backed by a low-level array.  It supports the 
     ## bracket operators and adding items at the end.
-    class Name {
+    class Name{
         
         array[Elem] __rep = null;
         uint __cap, __size;
@@ -147,7 +147,14 @@
             binder;
             __size = __size + 1;
         }
-    
+
+        Elem pop() {
+           if (__size>0)
+              return __rep[--__size];
+           else
+              return null;
+        }
+
         ArrayIter iter() {
             return ArrayIter(this);
         }
@@ -155,7 +162,7 @@
         uint capacity() {
             return __cap;
         }
-        
+
         ## delete the element at 'index'.
         void delete(uint index) {
             if (index > __size)
