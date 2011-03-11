@@ -42,11 +42,42 @@ void Context::warnOnHide(const string &name) {
             " hides another definition in an enclosing context." << endl;
 }
 
-Context::GlobalData::GlobalData() : 
-    objectType(0), 
-    stringType(0), 
-    staticStringType(0), 
-    migrationWarnings(false) {
+namespace {
+    void collectAncestorOverloads(OverloadDef *overload,
+                                  Namespace *srcNs
+                                  ) {
+        NamespacePtr parent;
+        for (unsigned i = 0; parent = srcNs->getParent(i++);) {
+            VarDefPtr var = parent->lookUp(overload->name, false);
+            OverloadDefPtr parentOvld;
+            if (!var) {
+                // the parent does not have this overload.  Check the next level.
+                collectAncestorOverloads(overload, parent.get());
+            } else {
+                parentOvld = OverloadDefPtr::rcast(var);
+                // if there is a variable of this name but it is not an overload, 
+                // we have a situation where there is a non-overload definition in 
+                // an ancestor namespace that will block resolution of the 
+                // overloads in all derived namespaces.  This is a bad thing, 
+                // but not something we want to deal with here.
+
+                if (parentOvld)
+                    overload->addParent(parentOvld.get());
+            }
+        }
+    }
+}
+
+OverloadDefPtr Context::replicateOverload(const std::string &varName,
+                                          Namespace *srcNs
+                                          ) {
+    OverloadDefPtr overload = new OverloadDef(varName);
+    overload->type = construct->overloadType;
+    
+    // merge in the overloads from the parents
+    collectAncestorOverloads(overload.get(), srcNs);
+    srcNs->addDef(overload.get());
+    return overload;
 }
 
 Context::Context(builder::Builder &builder, Context::Scope scope,
@@ -66,12 +97,13 @@ Context::Context(builder::Builder &builder, Context::Scope scope,
     terminal(false),
     returnType(parentContext ? parentContext->returnType : TypeDefPtr(0)),
     nextFuncFlags(FuncDef::noFlags),
-    globalData(parentContext ? parentContext->globalData : new GlobalData()),
+    construct(parentContext->construct),
     cleanupFrame(builder.createCleanupFrame(*this)) {
+    assert(construct && "parent context must have a construct");
 }
 
 Context::Context(builder::Builder &builder, Context::Scope scope,
-                 Context::GlobalData *globalData,
+                 Construct *construct,
                  Namespace *ns,
                  Namespace *compileNS
                  ) :
@@ -84,20 +116,22 @@ Context::Context(builder::Builder &builder, Context::Scope scope,
     terminal(false),
     returnType(TypeDefPtr(0)),
     nextFuncFlags(FuncDef::noFlags),
-    globalData(globalData),
+    construct(construct),
     cleanupFrame(builder.createCleanupFrame(*this)) {
 }
 
 Context::~Context() {}
 
-ContextPtr Context::createSubContext(Scope newScope, Namespace *ns) {
+ContextPtr Context::createSubContext(Scope newScope, Namespace *ns,
+                                     const string *name
+                                     ) {
     if (!ns) {
         switch (newScope) {
             case local:
-                ns = new LocalNamespace(this->ns.get(), "");
+                ns = new LocalNamespace(this->ns.get(), name ? *name : "");
                 break;
             case module:
-                ns = new GlobalNamespace(this->ns.get(), "");
+                ns = new GlobalNamespace(this->ns.get(), name ? *name : "");
                 break;
             case composite:
             case instance:
@@ -140,45 +174,44 @@ ContextPtr Context::getToplevel() {
 bool Context::encloses(const Context &other) const {
     if (this == &other)
         return true;
-    else if (parent)
-        return encloses(*parent);
+    else if (other.parent)
+        return encloses(*other.parent);
     else
         return false;
 }
 
-ModuleDefPtr Context::createModule(const string &name,
-                                   bool emitDebugInfo
-                                   ) {
-    return builder.createModule(*this, name, emitDebugInfo);
+ModuleDefPtr Context::createModule(const string &name) {
+    return builder.createModule(*this, name);
 }
 
 ExprPtr Context::getStrConst(const std::string &value, bool raw) {
     
     // look up the raw string constant
     StrConstPtr strConst;
-    StrConstTable::iterator iter = globalData->strConstTable.find(value);
-    if (iter != globalData->strConstTable.end()) {
+    Construct::StrConstTable::iterator iter = 
+        construct->strConstTable.find(value);
+    if (iter != construct->strConstTable.end()) {
         strConst = iter->second;
     } else {
         // create a new one
         strConst = builder.createStrConst(*this, value);
-        globalData->strConstTable[value] = strConst;
+        construct->strConstTable[value] = strConst;
     }
     
     // if we don't have a StaticString type yet (or the caller wants a raw
     // bytestr), we're done.
-    if (raw || !globalData->staticStringType)
+    if (raw || !construct->staticStringType)
         return strConst;
     
     // create the "new" expression for the string.
     vector<ExprPtr> args;
     args.push_back(strConst);
     args.push_back(builder.createIntConst(*this, value.size(),
-                                          globalData->uintType.get()
+                                          construct->uintType.get()
                                           )
                    );
     FuncDefPtr newFunc =
-        globalData->staticStringType->lookUp(*this, "oper new", args);
+        lookUp("oper new", args, construct->staticStringType.get());
     FuncCallPtr funcCall = builder.createFuncCall(newFunc.get());
     funcCall->args = args;
     return funcCall;    
@@ -242,7 +275,7 @@ void Context::emitVarDef(TypeDef *type, const parser::Token &tok,
                          Expr *initializer
                          ) {
 
-    if (globalData->migrationWarnings) {
+    if (construct->migrationWarnings) {
         if (initializer && NullConstPtr::cast(initializer)) {
             cerr << loc.getName() << ":" << loc.getLineNumber() << ": " <<
                 "unnecessary initialization to null" << endl;
@@ -280,7 +313,7 @@ void Context::emitVarDef(TypeDef *type, const parser::Token &tok,
 
 ExprPtr Context::createTernary(Expr *cond, Expr *trueVal, Expr *falseVal) {
     // make sure the condition can be converted to bool
-    ExprPtr boolCond = cond->convert(*this, globalData->boolType.get());
+    ExprPtr boolCond = cond->convert(*this, construct->boolType.get());
     if (!boolCond)
         error("Condition in ternary operator is not boolean.");
 
@@ -383,6 +416,10 @@ void Context::setContinue(Branchpoint *branch) {
     continueBranch = branch;
 }
 
+void Context::setCatchBranchpoint(Branchpoint *branch) {
+    catchBranch = branch;
+}
+
 Branchpoint *Context::getBreak() {
     if (breakBranch)
         return breakBranch.get();
@@ -407,6 +444,19 @@ Branchpoint *Context::getContinue() {
     }
 }
 
+ContextPtr Context::getCatch() {
+    if (catchBranch)
+        return this;
+    else if (toplevel)
+        return this;
+    else if (parent)
+        return parent->getCatch();
+}
+
+BranchpointPtr Context::getCatchBranchpoint() {
+    return catchBranch;
+}
+
 ExprPtr Context::makeThisRef(const string &memberName) {
    VarDefPtr thisVar = ns->lookUp("this");
    if (!thisVar)
@@ -426,7 +476,7 @@ void Context::expandIteration(const std::string &name, bool defineVar,
                               ExprPtr &afterBody
                               ) {
     // verify that the sequence has an "iter" method
-    FuncDefPtr iterFunc = seqExpr->type->lookUpNoArgs("iter");
+    FuncDefPtr iterFunc = lookUpNoArgs("iter", true, seqExpr->type.get());
     if (!iterFunc)
         error("iteration expression has no 'iter' method.");
     
@@ -474,7 +524,7 @@ void Context::expandIteration(const std::string &name, bool defineVar,
                              iterCall.get()
                              );
 
-        elemFunc = iterCall->type->lookUpNoArgs("elem");
+        elemFunc = lookUpNoArgs("elem", true, iterCall->type.get());
         
         if (defineVar) {
             warnOnHide(name);
@@ -511,18 +561,124 @@ void Context::expandIteration(const std::string &name, bool defineVar,
     }
     
     // convert it to a boolean for the condition
-    cond = iterRef->convert(*this, globalData->boolType.get());
+    cond = iterRef->convert(*this, construct->boolType.get());
     if (!cond)
         error("The iterator in a 'for' loop must convert to boolean.");
     
     // create the "iter.next()" expression
-    FuncDefPtr nextFunc = iterRef->type->lookUpNoArgs("next");
+    FuncDefPtr nextFunc = lookUpNoArgs("next", true, iterRef->type.get());
     if (!nextFunc)
         error("The iterator in a 'for' loop must provide a 'next()' method");
     FuncCallPtr nextCall = builder.createFuncCall(nextFunc.get());
     if (nextFunc->flags & FuncDef::method)
         nextCall->receiver = iterRef;
     afterBody = nextCall;
+}
+
+VarDefPtr Context::lookUp(const std::string &varName, Namespace *srcNs) {
+    if (!srcNs)
+        srcNs = ns.get();
+    VarDefPtr def = srcNs->lookUp(varName);
+
+    // if we got an overload, we may need to create an overload in this
+    // context.  (we can get away with checking the owner because overloads 
+    // are never aliased)
+    OverloadDef *overload = OverloadDefPtr::rcast(def);
+    if (overload && overload->getOwner() != srcNs)
+        return replicateOverload(varName, srcNs);
+    else
+        return def;
+}
+
+FuncDefPtr Context::lookUp(const std::string &varName,
+                           vector<ExprPtr> &args,
+                           Namespace *srcNs
+                           ) {
+    if (!srcNs)
+        srcNs = ns.get();
+
+    // do a lookup, if nothing was found no further action is necessary.
+    VarDefPtr var = lookUp(varName, srcNs);
+    if (!var)
+        return 0;
+    
+    // if "var" is a class definition, convert this to a lookup of the "oper 
+    // new" function on the class.
+    TypeDef *typeDef = TypeDefPtr::rcast(var);
+    if (typeDef) {
+        FuncDefPtr operNew = lookUp("oper new", args, typeDef);
+
+        // make sure we got it, and we didn't inherit it
+        if (!operNew || operNew->getOwner() != typeDef)
+            return 0;
+        
+        return operNew;
+    }
+    
+    // make sure we got an overload
+    OverloadDefPtr overload = OverloadDefPtr::rcast(var);
+    if (!overload)
+        return 0;
+    
+    // look up the signature in the overload
+    return overload->getMatch(*this, args);
+}
+
+FuncDefPtr Context::lookUpNoArgs(const std::string &name, bool acceptAlias,
+                                 Namespace *srcNs
+                                 ) {
+    OverloadDefPtr overload = OverloadDefPtr::rcast(lookUp(name, srcNs));
+    if (!overload)
+        return 0;
+
+    // we can just check for a signature match here - cheaper and easier.
+    FuncDef::ArgVec args;
+    FuncDefPtr result = overload->getNoArgMatch(acceptAlias);
+    return result;
+}
+
+VarDefPtr Context::addDef(VarDef *varDef, Namespace *srcNs) {
+    if (!srcNs)
+        srcNs = ns.get();
+    FuncDef *funcDef = FuncDefPtr::cast(varDef);
+    if (funcDef) {
+        OverloadDefPtr overload = 
+            OverloadDefPtr::rcast(lookUp(varDef->name, srcNs));
+        if (!overload)
+            overload = replicateOverload(varDef->name, srcNs);
+        overload->addFunc(funcDef);
+        funcDef->setOwner(srcNs);
+        return overload;
+    } else {
+        srcNs->addDef(varDef);
+        return varDef;
+    }
+}
+
+void Context::insureOverloadPath(Context *ancestor, OverloadDef *overload) {
+    // see if we define the overload, if not we're done.
+    OverloadDefPtr localOverload =
+        OverloadDefPtr::rcast(ns->lookUp(overload->name, false));
+    if (!localOverload)
+        return;
+
+    // this code assumes that 'ancestor' must always be a direct ancestor of 
+    // our namespace.  This isn't strictly essential, but it shouldn't be 
+    // necessary to support the general case.  If we change this assumption, 
+    // we'll get an assertion failure to warn us.
+
+    // see if the overload is one of our overload's parents, if so we're done.
+    if (localOverload->hasParent(overload))
+        return;
+
+    // verify that we are directly derived from the namespace.
+    NamespacePtr parentNs;
+    for (int i = 0; parentNs = ns->getParent(i++);)
+        if (parent.get() == ancestor)
+            break;
+    assert(parent && "insureOverloadPath(): parent is not a direct parent.");
+    
+    localOverload->addParent(overload);
 }
 
 AnnotationPtr Context::lookUpAnnotation(const std::string &name) {
@@ -539,7 +695,7 @@ AnnotationPtr Context::lookUpAnnotation(const std::string &name) {
     // the builder to create an ArgDef here because it's just for a signature 
     // match).
     FuncDef::ArgVec args(1);
-    args[0] = new ArgDef(globalData->crackContext.get(), "context");
+    args[0] = new ArgDef(construct->crackContext.get(), "context");
 
     OverloadDef *ovld = OverloadDefPtr::rcast(result);
     if (ovld) {
@@ -575,7 +731,7 @@ void Context::error(const parser::Location &loc, const string &msg,
                     bool throwException
                     ) {
     
-    list<string> &ec = globalData->errorContexts;
+    list<string> &ec = construct->errorContexts;
     if (throwException)
         throw parser::ParseError(SPUG_FSTR(loc.getName() << ':' <<
                                            loc.getLineNumber() << ": " <<
@@ -597,11 +753,11 @@ void Context::warn(const parser::Location &loc, const string &msg) {
 }
 
 void Context::pushErrorContext(const string &msg) {
-    globalData->errorContexts.push_front(msg);
+    construct->errorContexts.push_front(msg);
 }
 
 void Context::popErrorContext() {
-    globalData->errorContexts.pop_front();
+    construct->errorContexts.pop_front();
 }
 
 void Context::dump(ostream &out, const std::string &prefix) const {

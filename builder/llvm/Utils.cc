@@ -5,6 +5,8 @@
 #include "BTypeDef.h"
 #include "Ops.h"
 #include "LLVMBuilder.h"
+#include "BCleanupFrame.h"
+
 #include <llvm/Module.h>
 #include <llvm/LLVMContext.h>
 #include <llvm/GlobalValue.h>
@@ -17,17 +19,25 @@ using namespace std;
 
 namespace builder { namespace mvll {
 
+void closeAllCleanupsStatic(Context &context) {
+    BCleanupFrame* frame = BCleanupFramePtr::rcast(context.cleanupFrame);
+    while (frame) {
+        frame->close();
+        frame = BCleanupFramePtr::rcast(frame->parent);
+    }
+}
+
 void addArrayMethods(Context &context, TypeDef *arrayType,
                      BTypeDef *elemType
                      ) {
-    Context::GlobalData *gd = context.globalData;
+    Construct *gd = context.construct;
     FuncDefPtr arrayGetItem =
             new GeneralOpDef<ArrayGetItemCall>(elemType, FuncDef::method,
                                                "oper []",
                                                1
                                                );
     arrayGetItem->args[0] = new ArgDef(gd->uintType.get(), "index");
-    arrayType->addDef(arrayGetItem.get());
+    context.addDef(arrayGetItem.get(), arrayType);
 
     arrayGetItem =
             new GeneralOpDef<ArrayGetItemCall>(elemType, FuncDef::method,
@@ -35,7 +45,7 @@ void addArrayMethods(Context &context, TypeDef *arrayType,
                                                1
                                                );
     arrayGetItem->args[0] = new ArgDef(gd->intType.get(), "index");
-    arrayType->addDef(arrayGetItem.get());
+    context.addDef(arrayGetItem.get(), arrayType);
 
     FuncDefPtr arraySetItem =
             new GeneralOpDef<ArraySetItemCall>(elemType, FuncDef::method,
@@ -44,7 +54,7 @@ void addArrayMethods(Context &context, TypeDef *arrayType,
                                                );
     arraySetItem->args[0] = new ArgDef(gd->uintType.get(), "index");
     arraySetItem->args[1] = new ArgDef(elemType, "value");
-    arrayType->addDef(arraySetItem.get());
+    context.addDef(arraySetItem.get(), arrayType);
 
     arraySetItem =
             new GeneralOpDef<ArraySetItemCall>(elemType, FuncDef::method,
@@ -53,7 +63,7 @@ void addArrayMethods(Context &context, TypeDef *arrayType,
                                                );
     arraySetItem->args[0] = new ArgDef(gd->intType.get(), "index");
     arraySetItem->args[1] = new ArgDef(elemType, "value");
-    arrayType->addDef(arraySetItem.get());
+    context.addDef(arraySetItem.get(), arrayType);
 
     FuncDefPtr arrayOffset =
             new GeneralOpDef<ArrayOffsetCall>(arrayType, FuncDef::method,
@@ -61,7 +71,7 @@ void addArrayMethods(Context &context, TypeDef *arrayType,
                                               1
                                               );
     arrayOffset->args[0] = new ArgDef(gd->uintType.get(), "offset");
-    arrayType->addDef(arrayOffset.get());
+    context.addDef(arrayOffset.get(), arrayType);
 
     arrayOffset =
             new GeneralOpDef<ArrayOffsetCall>(arrayType, FuncDef::method,
@@ -69,7 +79,7 @@ void addArrayMethods(Context &context, TypeDef *arrayType,
                                               1
                                               );
     arrayOffset->args[0] = new ArgDef(gd->intType.get(), "offset");
-    arrayType->addDef(arrayOffset.get());
+    context.addDef(arrayOffset.get(), arrayType);
 
     FuncDefPtr arrayAlloc =
             new GeneralOpDef<ArrayAllocCall>(arrayType, FuncDef::noFlags,
@@ -77,7 +87,7 @@ void addArrayMethods(Context &context, TypeDef *arrayType,
                                              1
                                              );
     arrayAlloc->args[0] = new ArgDef(gd->uintType.get(), "size");
-    arrayType->addDef(arrayAlloc.get());
+    context.addDef(arrayAlloc.get(), arrayType);
 }
 
 void createClassImpl(Context &context, BTypeDef *type) {
@@ -85,7 +95,7 @@ void createClassImpl(Context &context, BTypeDef *type) {
     LLVMBuilder &llvmBuilder = dynamic_cast<LLVMBuilder &>(context.builder);
 
     // get the LLVM class structure type from out of the meta class rep.
-    BTypeDef *classType = BTypeDefPtr::arcast(context.globalData->classType);
+    BTypeDef *classType = BTypeDefPtr::arcast(context.construct->classType);
     const PointerType *classPtrType = cast<PointerType>(classType->rep);
     const StructType *classStructType =
         cast<StructType>(classPtrType->getElementType());
@@ -111,7 +121,7 @@ void createClassImpl(Context &context, BTypeDef *type) {
 
     // numBases
     const Type *uintType = 
-        BTypeDefPtr::arcast(context.globalData->uintType)->rep;
+        BTypeDefPtr::arcast(context.construct->uintType)->rep;
     classStructVals[1] = ConstantInt::get(uintType, type->parents.size());
 
     // bases
@@ -163,7 +173,7 @@ void createClassImpl(Context &context, BTypeDef *type) {
         ConstantStruct::get(metaClassStructType, metaClassStructVals);
 
     // Create the class global variable
-    GlobalVariable *classInst =
+    type->classInst =
         new GlobalVariable(*llvmBuilder.module, metaClassStructType,
                            true, // is constant
                            GlobalValue::ExternalLinkage,
@@ -176,7 +186,7 @@ void createClassImpl(Context &context, BTypeDef *type) {
         new GlobalVariable(*llvmBuilder.module, metaClassPtrType,
                            true, // is constant
                            GlobalVariable::ExternalLinkage,
-                           classInst,
+                           type->classInst,
                            type->name
                            );
 
@@ -193,13 +203,13 @@ BTypeDefPtr createMetaClass(Context &context, const string &name) {
     LLVMContext &lctx = getGlobalContext();
 
     BTypeDefPtr metaType =
-        new BTypeDef(context.globalData->classType.get(),
+        new BTypeDef(context.construct->classType.get(),
                      SPUG_FSTR("Class[" << name << "]"),
                      0,
                      true,
                      0
                      );
-    BTypeDef *classType = BTypeDefPtr::arcast(context.globalData->classType);
+    BTypeDef *classType = BTypeDefPtr::arcast(context.construct->classType);
     metaType->addBaseClass(classType);
     const PointerType *classPtrType = cast<PointerType>(classType->rep);
     const StructType *classStructType =
@@ -219,4 +229,4 @@ BTypeDefPtr createMetaClass(Context &context, const string &name) {
     return metaType;
 }
 
-} } // namespace builder::mvll
+}} // namespace builder::mvll

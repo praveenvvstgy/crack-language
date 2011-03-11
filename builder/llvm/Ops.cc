@@ -197,14 +197,14 @@ ResultExprPtr LogicAndOpCall::emit(Context &context) {
     args[1].get()->emitCond(context);
     Value* tVal = builder.lastValue; // arg[1] condition value
     context.closeCleanupFrame();
-    BasicBlock* tBlock = builder.block; // arg[1] value block
+    BasicBlock* tBlock = builder.builder.GetInsertBlock(); // arg[1] val block
 
     // this branches us to end
     builder.emitEndIf(context, pos.get(), false);
 
     // now we phi for result
     PHINode* p = builder.builder.CreatePHI(
-            BTypeDefPtr::arcast(context.globalData->boolType)->rep,
+            BTypeDefPtr::arcast(context.construct->boolType)->rep,
             "and_R");
     p->addIncoming(oVal, oBlock);
     p->addIncoming(tVal, tBlock);
@@ -232,12 +232,12 @@ ResultExprPtr LogicOrOpCall::emit(Context &context) {
     BasicBlock *oBlock = bpos->block2; // condition block
 
     // now pointing to true block, save it for phi
-    BasicBlock *tBlock = builder.block;
+    BasicBlock *tBlock = builder.builder.GetInsertBlock();
 
     // repoint to false block, emit condition of rhs (in its own
     // cleanup frame, we only want to cleanup if we evaluated this
     // expression)
-    builder.builder.SetInsertPoint(builder.block = fBlock);
+    builder.builder.SetInsertPoint(fBlock);
     context.createCleanupFrame();
     args[1]->emitCond(context);
     Value *fVal = builder.lastValue; // arg[1] condition value
@@ -246,12 +246,12 @@ ResultExprPtr LogicOrOpCall::emit(Context &context) {
     builder.builder.CreateBr(tBlock);
 
     // pick up any changes to the fBlock
-    fBlock = builder.block;
+    fBlock = builder.builder.GetInsertBlock();
 
     // now jump back to true and phi for result
-    builder.builder.SetInsertPoint(builder.block = tBlock);
+    builder.builder.SetInsertPoint(tBlock);
     PHINode *p = builder.builder.CreatePHI(
-            BTypeDefPtr::arcast(context.globalData->boolType)->rep,
+            BTypeDefPtr::arcast(context.construct->boolType)->rep,
             "or_R"
             );
     p->addIncoming(oVal, oBlock);
@@ -359,8 +359,8 @@ ResultExprPtr ArrayAllocCall::emit(Context &context) {
     // get the BTypeDef from the return type, then get the pointer
     // type out of that
     BTypeDef *retType = BTypeDefPtr::rcast(func->returnType);
-    PointerType *ptrType =
-            cast<PointerType>(const_cast<Type *>(retType->rep));
+    const PointerType *ptrType =
+            cast<const PointerType>(retType->rep);
 
     // malloc based on the element type
     builder.emitAlloc(context, new

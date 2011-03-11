@@ -5,6 +5,7 @@
 
 #include "model/TypeDef.h"
 #include "VTableBuilder.h"
+#include <llvm/Type.h>
 
 #include <map>
 #include <string>
@@ -13,6 +14,7 @@
 namespace llvm {
     class Type;
     class Constant;
+    class GlobalVariable;
 }
 
 namespace builder {
@@ -26,13 +28,14 @@ SPUG_RCPTR(BTypeDef);
 class BTypeDef : public model::TypeDef {
 public:
     unsigned fieldCount;
+    llvm::GlobalVariable *classInst;
     const llvm::Type *rep;
     unsigned nextVTableSlot;
     std::vector<PlaceholderInstruction *> placeholders;
 
     // mapping from base types to their vtables.
     std::map<BTypeDef *, llvm::Constant *> vtables;
-    const llvm::Type *firstVTableType;
+    llvm::PATypeHolder firstVTableType;
 
     BTypeDef(TypeDef *metaType, const std::string &name,
              const llvm::Type *rep,
@@ -41,6 +44,7 @@ public:
              ) :
         model::TypeDef(metaType, name, pointer),
         fieldCount(0),
+        classInst(0),
         rep(rep),
         nextVTableSlot(nextVTableSlot),
         firstVTableType(0) {
@@ -78,7 +82,12 @@ public:
      * Find the ancestor with our first vtable.
      */
     BTypeDef *findFirstVTable(BTypeDef *vtableBaseType);
-
+    
+    /**
+     * Get the global variable, creating an extern instance in the module if 
+     * it lives in another module.
+     */
+    llvm::GlobalVariable *getClassInstRep(llvm::Module *module);
 };
 
 } // end namespace builder::vmll

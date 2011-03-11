@@ -3,6 +3,7 @@ ext/Func.cc
 ext/RCObj.cc
 ext/Type.cc
 model/Annotation.cc
+model/Construct.cc
 model/StrConst.cc
 model/AssignExpr.cc
 model/VarRef.cc
@@ -32,6 +33,8 @@ parser/Parser.cc
 parser/ParseError.cc
 parser/Token.cc
 builder/llvm/ArrayTypeDef.cc
+builder/llvm/BBuilderContextData.cc
+builder/llvm/BCleanupFrame.cc
 builder/llvm/BFieldRef.cc
 builder/llvm/BFuncDef.cc
 builder/llvm/BTypeDef.cc
@@ -39,6 +42,10 @@ builder/llvm/Consts.cc
 builder/llvm/Incompletes.cc
 builder/llvm/FuncBuilder.cc
 builder/llvm/LLVMBuilder.cc
+builder/llvm/LLVMJitBuilder.cc
+builder/llvm/LLVMLinkerBuilder.cc
+builder/llvm/LLVMValueExpr.cc
+builder/llvm/Native.cc
 builder/llvm/Ops.cc
 builder/llvm/PlaceholderInstruction.cc
 builder/llvm/Utils.cc
@@ -51,3 +58,4 @@ compiler/CrackContext.cc
 compiler/Token2.cc
 compiler/Location2.cc
 Crack.cc
+
