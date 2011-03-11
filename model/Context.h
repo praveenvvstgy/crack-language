@@ -5,9 +5,9 @@
 
 #include <map>
 #include <vector>
-#include <list>
 #include <spug/RCBase.h>
 #include <spug/RCPtr.h>
+#include "Construct.h"
 #include "FuncDef.h"
 #include "parser/Location.h"
 
@@ -41,10 +41,8 @@ SPUG_RCPTR(Context);
  */
 class Context : public spug::RCBase {
     private:
-        typedef std::map<std::string, StrConstPtr> StrConstTable;
-        
-        // break and continue branchpoints
-        BranchpointPtr breakBranch, continueBranch;
+        // break, continue and catch branchpoints
+        BranchpointPtr breakBranch, continueBranch, catchBranch;
         
         // the current source location.
         parser::Location loc;
@@ -62,6 +60,11 @@ class Context : public spug::RCBase {
         // enclosing context.
         void warnOnHide(const std::string &name);
 
+        // create a new overload for srcNs that correctly delegates to the 
+        // ancestor namespace.
+        OverloadDefPtr replicateOverload(const std::string &varName,
+                                         Namespace *srcNs
+                                         );
     public:
 
         // context scope - this is used to control how variables defined in 
@@ -106,50 +109,15 @@ class Context : public spug::RCBase {
         // flags to be injected into the next function
         FuncDef::Flags nextFuncFlags;
 
-        struct GlobalData {
-            StrConstTable strConstTable;
-            TypeDefPtr classType,
-                       voidType,
-                       voidptrType,
-                       boolType,
-                       byteptrType,
-                       byteType,
-                       int32Type,
-                       int64Type,
-                       uint32Type,
-                       uint64Type,
-                       intType,
-                       uintType,
-                       float32Type,
-                       float64Type,
-                       floatType,
-                       vtableBaseType,
-                       objectType,
-                       stringType,
-                       staticStringType,
-                       overloadType,
-                       crackContext;
-
-            // if true, emit warnings about things that have changed since the 
-            // last version of the language.
-            bool migrationWarnings;
-            
-            // the error context stack.  This needs to be global because it is 
-            // managed by annotations and transcends local contexts.
-            std::list<std::string> errorContexts;
-
-            // just make sure the bootstrapped types are null
-            GlobalData();
-        } *globalData;
+        // the construct
+        Construct *construct;
     
-        Context(builder::Builder &builder, Scope scope,
-                Context *parentContext,
+        Context(builder::Builder &builder, Scope scope, Context *parentContext,
                 Namespace *ns,
                 Namespace *compileNS
                 );
         
-        Context(builder::Builder &builder, Scope scope,
-                GlobalData *globalData,
+        Context(builder::Builder &builder, Scope scope, Construct *construct,
                 Namespace *ns,
                 Namespace *compileNS
                 );
@@ -160,7 +128,9 @@ class Context : public spug::RCBase {
          * Create a new subcontext with a different scope from the parent 
          * context.
          */
-        ContextPtr createSubContext(Scope newScope, Namespace *ns = 0);
+        ContextPtr createSubContext(Scope newScope, Namespace *ns = 0,
+                                    const std::string *name = 0
+                                    );
 
         /**
          * Create a new subcontext in the same scope.
@@ -195,14 +165,24 @@ class Context : public spug::RCBase {
         }
 
         /**
+         * Returns the compile-time construct - this will revert to the 
+         * default construct if there is no compile-time construct.
+         */
+        Construct *getCompileTimeConstruct() {
+            if (construct->compileTimeConstruct.get())
+                return construct->compileTimeConstruct.get();
+            else
+                return construct;
+        }
+
+        /**
          * Returns true if the context encloses the "other" context - a 
          * context encloses another context if it is an ancestor of the other 
          * context.
          */
         bool encloses(const Context &other) const;
 
-        ModuleDefPtr createModule(const std::string &name,
-                                  bool emitDebugInfo = false);
+        ModuleDefPtr createModule(const std::string &name);
 
         /** 
          * Get or create a string constant.  This can be either a
@@ -282,6 +262,12 @@ class Context : public spug::RCBase {
         void setContinue(Branchpoint *branch);
         
         /**
+         * Set the "catch" flag, indicating that this context is in a try 
+         * block.
+         */
+        void setCatchBranchpoint(Branchpoint *branch);
+        
+        /**
          * Obtains the branchpoint to be used for a break statement, returns 
          * null if there is none.
          */
@@ -292,6 +278,18 @@ class Context : public spug::RCBase {
          * returns null if there is none.
          */
         Branchpoint *getContinue();
+        
+        /**
+         * Returns the catch context - this is either the first enclosing 
+         * context with a try/catch statement or the parent of the toplevel 
+         * context.
+         */
+        ContextPtr getCatch();
+        
+        /**
+         * Returns the catch branchpoint for the context.
+         */
+        BranchpointPtr getCatchBranchpoint();
 
         /**
          * Create a reference to the "this" variable, error if there is none.
@@ -311,6 +309,63 @@ class Context : public spug::RCBase {
                              ExprPtr &afterBody
                              );
 
+        // Function store/lookup methods (these are handled through a Context 
+        // instead of a namespace because Context can better do overload 
+        // management)
+
+        /**
+         * Looks up a symbol in the context.  Use this when looking up an 
+         * overload definition if you care about it including all possible 
+         * overloads accessible from the scope.
+         */
+        VarDefPtr lookUp(const std::string &varName, Namespace *srcNs = 0);
+    
+        /**
+         * Looks up a function matching the given expression list.
+         * 
+         * @param context the current context (distinct from the lookup 
+         *  context)
+         * @param varName the function name
+         * @param vals list of parameter expressions.  These will be converted 
+         *  to conversion expressions of the correct type for a match.
+         * @param srcNs if specified, the namespace to do the lookup in 
+         *  (default is the context's namespace)
+         */
+        FuncDefPtr lookUp(const std::string &varName,
+                          std::vector<ExprPtr> &vals,
+                          Namespace *srcNs = 0
+                          );
+        
+        /**
+         * Look up a function with no arguments.  This is provided as a 
+         * convenience, as in this case we don't need to pass the call context.
+         * @param acceptAlias if false, ignore an alias.
+         * @param srcNs if specified, the namespace to do the lookup in 
+         *  (default is the context's namespace)
+         */
+        FuncDefPtr lookUpNoArgs(const std::string &varName, 
+                                bool acceptAlias = true,
+                                Namespace *srcNs = 0
+                                );
+
+        /**
+         * Add a new variable definition to the context namespace.  This is 
+         * preferable to the Namespace::addDef() method in that it wraps 
+         * FuncDef objects in an OverloadDef.
+         * @returns the definition that was actually stored.  This could be 
+         *  varDef or 
+         */
+        VarDefPtr addDef(VarDef *varDef, Namespace *srcNs = 0);
+
+        /**
+         * Insures that if there is a child overload definition for 'overload' 
+         * in the context's namespace, that it delegates to 'overload' in 
+         * 'ancestor's namespace.
+         */
+        void insureOverloadPath(Context *ancestor, OverloadDef *overload);
+
+        // location management
+
         /**
          * Set the current source location.
          */        
@@ -325,11 +380,15 @@ class Context : public spug::RCBase {
             return loc;
         }
         
+        // annotation management
+
         /**
          * Look up the annotation in the compile namespace.  Returns null if 
          * undefined.
          */
         AnnotationPtr lookUpAnnotation(const std::string &name);
+
+        // error/warning handling
 
         /**
          * Emit an error message.  If 'throwException' is true, a 

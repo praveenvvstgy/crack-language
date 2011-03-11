@@ -15,6 +15,7 @@
 #include "Util.h"
 #include "Net.h"
 #include "Math.h"
+#include "Exceptions.h"
 using namespace crack::ext;
 
 extern "C" void crack_runtime_init(Module *mod) {
@@ -53,10 +54,10 @@ extern "C" void crack_runtime_init(Module *mod) {
     f->addArg(byteptrType, "pattern");
     f->addArg(byteptrType, "string");
     
-    f = mod->addFunc(byteptrType, "basename", (void *)basename);
+    f = mod->addFunc(byteptrType, "basename", (void *)basename, "basename");
     f->addArg(byteptrType, "path");
     
-    f = mod->addFunc(byteptrType, "dirname", (void *)dirname);
+    f = mod->addFunc(byteptrType, "dirname", (void *)dirname, "dirname");
     f->addArg(byteptrType, "path");
     
     f = mod->addFunc(byteptrType, "c_strerror",
@@ -75,7 +76,37 @@ extern "C" void crack_runtime_init(Module *mod) {
                      );
     f->addArg(mod->getUintType(), "low");
     f->addArg(mod->getUintType(), "high");
-    
+
+    f = mod->addFunc(byteptrType, "puts",
+                     (void *)crack::runtime::puts
+                     );
+    f->addArg(mod->getByteptrType(), "str");
+
+    f = mod->addFunc(byteptrType, "__die",
+                     (void *)crack::runtime::__die
+                     );
+    f->addArg(mod->getByteptrType(), "message");
+
+    f = mod->addFunc(byteptrType, "printfloat",
+                     (void *)crack::runtime::printfloat
+                     );
+    f->addArg(mod->getFloatType(), "val");
+
+    f = mod->addFunc(byteptrType, "printint",
+                     (void *)crack::runtime::printint
+                     );
+    f->addArg(mod->getIntType(), "val");
+
+    f = mod->addFunc(byteptrType, "printint64",
+                     (void *)crack::runtime::printint
+                     );
+    f->addArg(mod->getInt64Type(), "val");
+
+    f = mod->addFunc(byteptrType, "printuint64",
+                     (void *)crack::runtime::printint
+                     );
+    f->addArg(mod->getUint64Type(), "val");
+
     // normal file open and close.
 
     f = mod->addFunc(intType, "open", (void *)open);
@@ -309,56 +340,56 @@ extern "C" void crack_runtime_init(Module *mod) {
     // end PollSet
 
     // misc C functions
-    f = mod->addFunc(intType, "close", (void *)close);
+    f = mod->addFunc(intType, "close", (void *)close, "close");
     f->addArg(intType, "fd");
     
-    f = mod->addFunc(intType, "socket", (void *)socket);
+    f = mod->addFunc(intType, "socket", (void *)socket, "socket");
     f->addArg(intType, "domain");
     f->addArg(intType, "type");
     f->addArg(intType, "protocol");
     
-    f = mod->addFunc(intType, "listen", (void *)listen);
+    f = mod->addFunc(intType, "listen", (void *)listen, "listen");
     f->addArg(intType, "fd");
     f->addArg(intType, "backlog");
     
-    f = mod->addFunc(intType, "send", (void *)send);
+    f = mod->addFunc(intType, "send", (void *)send, "send");
     f->addArg(intType, "fd");
     f->addArg(byteptrType, "buf");
     f->addArg(uintType, "size");
     f->addArg(intType, "flags");
     
-    f = mod->addFunc(intType, "recv", (void *)recv);
+    f = mod->addFunc(intType, "recv", (void *)recv, "recv");
     f->addArg(intType, "fd");
     f->addArg(byteptrType, "buf");
     f->addArg(uintType, "size");
     f->addArg(intType, "flags");
 
-    f = mod->addFunc(voidType, "abort", (void *)abort);
+    f = mod->addFunc(voidType, "abort", (void *)abort, "abort");
 
-    f = mod->addFunc(voidType, "free", (void *)free);
+    f = mod->addFunc(voidType, "free", (void *)free, "free");
     f->addArg(voidptrType, "size");
     
-    f = mod->addFunc(voidType, "strcpy", (void *)strcpy);
+    f = mod->addFunc(voidType, "strcpy", (void *)strcpy, "strcpy");
     f->addArg(byteptrType, "dst");
     f->addArg(byteptrType, "src");
 
-    f = mod->addFunc(uintType, "strlen", (void *)strlen);
+    f = mod->addFunc(uintType, "strlen", (void *)strlen, "strlen");
     f->addArg(byteptrType, "str");
 
-    f = mod->addFunc(byteptrType, "malloc", (void *)malloc);
+    f = mod->addFunc(byteptrType, "malloc", (void *)malloc, "malloc");
     f->addArg(uintType, "size");
     
-    f = mod->addFunc(byteptrType, "memcpy", (void *)memcpy);
+    f = mod->addFunc(byteptrType, "memcpy", (void *)memcpy, "memcpy");
     f->addArg(byteptrType, "dst");
     f->addArg(byteptrType, "src");
     f->addArg(uintType, "size");
     
-    f = mod->addFunc(intType, "memcmp", (void *)memcmp);
+    f = mod->addFunc(intType, "memcmp", (void *)memcmp, "memcmp");
     f->addArg(byteptrType, "a");
     f->addArg(byteptrType, "b");
     f->addArg(uintType, "size");
     
-    f = mod->addFunc(byteptrType, "memmove", (void *)memmove);
+    f = mod->addFunc(byteptrType, "memmove", (void *)memmove, "memmove");
     f->addArg(byteptrType, "dst");
     f->addArg(byteptrType, "src");
     f->addArg(uintType, "size");
@@ -366,29 +397,39 @@ extern "C" void crack_runtime_init(Module *mod) {
     Type *cFileType = mod->addType("CFile");
     cFileType->finish();
     
-    f = mod->addFunc(cFileType, "fopen", (void *)fopen);
+    f = mod->addFunc(cFileType, "fopen", (void *)fopen, "fopen");
     f->addArg(byteptrType, "path");
     f->addArg(byteptrType, "mode");
     
-    f = mod->addFunc(intType, "fclose", (void *)fclose);
+    f = mod->addFunc(intType, "fclose", (void *)fclose, "close");
     f->addArg(cFileType, "fp");
     
-    f = mod->addFunc(intType, "fileno", (void *)fileno);
+    f = mod->addFunc(intType, "fileno", (void *)fileno, "fileno");
     f->addArg(cFileType, "fp");
 
-    f = mod->addFunc(intType, "read", (void *)read);
+    f = mod->addFunc(intType, "read", (void *)read, "read");
     f->addArg(intType, "fd");
     f->addArg(byteptrType, "buf");
     f->addArg(uintType, "count");
 
-    f = mod->addFunc(intType, "write", (void *)write);
+    f = mod->addFunc(intType, "write", (void *)write, "write");
     f->addArg(intType, "fd");
     f->addArg(byteptrType, "buf");
     f->addArg(uintType, "count");
 
-    f = mod->addFunc(voidType, "exit", (void *)exit);
+    f = mod->addFunc(voidType, "exit", (void *)exit, "exit");
     f->addArg(intType, "status");
 
     // Add math functions
     crack::runtime::math_init(mod);
+    
+    // add exception functions
+    mod->addConstant(intType, "EXCEPTION_MATCH_FUNC", 
+                     crack::runtime::exceptionMatchFuncHook
+                     );
+    f = mod->addFunc(voidType, "registerHook", 
+                     (void *)crack::runtime::registerHook
+                     );
+    f->addArg(intType, "hookId");
+    f->addArg(voidptrType, "hook");
 }

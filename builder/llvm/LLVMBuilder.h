@@ -16,7 +16,6 @@ namespace llvm {
     class Type;
     class Value;
     class Function;
-    class ExecutionEngine;
 };
 
 namespace builder {
@@ -26,14 +25,14 @@ SPUG_RCPTR(BHeapVarDefImpl);
 SPUG_RCPTR(BTypeDef);
 class DebugInfo;
 class FuncBuilder;
+class BModuleDef;
 SPUG_RCPTR(LLVMBuilder);
 
 class LLVMBuilder : public Builder {
-    private:
+    protected:
 
         llvm::Function *callocFunc;
         DebugInfo *debugInfo;
-        llvm::ExecutionEngine *execEng;
         
         // emit all cleanups for context and all parent contextts up to the 
         // level of the function
@@ -58,8 +57,13 @@ class LLVMBuilder : public Builder {
         ModVarMap moduleVars;
 
         LLVMBuilderPtr rootBuilder;
-        
-        llvm::ExecutionEngine *bindModule(llvm::Module *mp);
+
+        /**
+         * Creates a new LLVM module and initializes all of the exception 
+         * handling declarations that need to be present.  Assigns the 
+         * 'module' instance variable to the new module.
+         */
+        void createLLVMModule(const std::string &name);
 
         void initializeMethodInfo(model::Context &context, 
                                   model::FuncDef::Flags flags,
@@ -68,16 +72,65 @@ class LLVMBuilder : public Builder {
                                   FuncBuilder &funcBuilder
                                   );
 
+        /**
+         * JIT builder uses this to map GlobalValue* to their JITed versions,
+         * Linked builder ignores this, as these are resolved during the link
+         * instead. It is called from getModFunc and getModVar
+         */
+        virtual void addGlobalFuncMapping(llvm::Function*,
+                                          llvm::Function*) { }
+        virtual void addGlobalFuncMapping(llvm::Function*,
+                                          void*) { }
+        virtual void addGlobalVarMapping(llvm::GlobalValue*,
+                                         llvm::GlobalValue*) { }
+
+        /**
+         * possibly bind the module to an execution engine
+         * called in base llvmbuilder only from registerPrimFuncs
+         */
+        virtual void engineBindModule(BModuleDef *moduleDef) { }
+
+        /**
+         * let the engine "finish" a module before running/linking/dumping
+         * called in base llvmbuilder only from registerPrimFuncs
+         */
+        virtual void engineFinishModule(BModuleDef *moduleDef) { }
+
+        /**
+         * common module initialization that happens in all builders
+         * during createModule. includes some functions that need to be
+         * defined in each module.
+         */
+        void createModuleCommon(model::Context &context);
+
+        /**
+         * Gets the first unwind block for the context, emitting the whole 
+         * cleanup chain if necessary.
+         */
+        llvm::BasicBlock *getUnwindBlock(model::Context &context);
+        
+        /**
+         * Clears all cached cleanup blocks associated with the context (this 
+         * exists to deal with the module level init and delete functions, 
+         * which both run against the module context).
+         */
+        void clearCachedCleanups(model::Context &context);
+
+        /** Creates special hidden variables used by the generated code. */
+        void createSpecialVar(model::Namespace *ns, model::TypeDef *type, 
+                              const std::string &name
+                              );
     public:
         // currently experimenting with making these public to give objects in 
         // LLVMBuilder.cc's anonymous internal namespace access to them.  It 
         // seems to be cutting down on the amount of code necessary to do this.
         llvm::Module *module;
         llvm::Function *func;
-        llvm::Type *llvmVoidPtrType;
+        const llvm::Type *llvmVoidPtrType;
         llvm::IRBuilder<> builder;
         llvm::Value *lastValue;
-        llvm::BasicBlock *block, *funcBlock;
+        llvm::BasicBlock *funcBlock;
+        llvm::Function *exceptionPersonalityFunc;
         static int argc;
         static char **argv;
 
@@ -107,11 +160,9 @@ class LLVMBuilder : public Builder {
                                 unsigned int nextVTableSlot
                                 );
 
-        void *getFuncAddr(llvm::Function *func);
+        virtual void *getFuncAddr(llvm::Function *func) = 0;
 
         LLVMBuilder();
-
-        virtual BuilderPtr createChildBuilder();
 
         virtual model::ResultExprPtr emitFuncCall(
             model::Context &context, 
@@ -196,6 +247,23 @@ class LLVMBuilder : public Builder {
                                   model::Branchpoint *branch
                                   );
 
+        virtual model::BranchpointPtr emitBeginTry(model::Context &context);
+        
+        virtual model::ExprPtr emitCatch(model::Context &context,
+                                         model::Branchpoint *branchpoint,
+                                         model::TypeDef *catchType,
+                                         bool terminal
+                                         );
+        
+        virtual void emitEndTry(model::Context &context,
+                                model::Branchpoint *branchpoint,
+                                bool terminal
+                                );
+
+        virtual void emitThrow(model::Context &context,
+                               model::Expr *expr
+                               );
+
         virtual model::FuncDefPtr
             createFuncForward(model::Context &context,
                               model::FuncDef::Flags flags,
@@ -229,7 +297,9 @@ class LLVMBuilder : public Builder {
                              model::TypeDef *returnType,
                              model::TypeDef *receiverType,
                              const std::vector<model::ArgDefPtr> &args,
-                             void *cfunc
+                             void *cfunc,
+                             const char *symbolName=0
+
                              );
 
         virtual model::TypeDefPtr
@@ -270,13 +340,6 @@ class LLVMBuilder : public Builder {
                                                      model::AssignExpr *assign
                                                      );
 
-        virtual model::ModuleDefPtr createModule(model::Context &context,
-                                                 const std::string &name,
-                                                 bool emitDebugInfo = false
-                                                 );
-        virtual void closeModule(model::Context &context,
-                                 model::ModuleDef *module
-                                 );
         virtual model::CleanupFramePtr
             createCleanupFrame(model::Context &context);
         virtual void closeAllCleanups(model::Context &context);
@@ -296,18 +359,19 @@ class LLVMBuilder : public Builder {
                                                   );
 
         virtual model::ModuleDefPtr registerPrimFuncs(model::Context &context);
-        virtual void loadSharedLibrary(const std::string &name,
+
+        virtual void *loadSharedLibrary(const std::string &name);
+
+        virtual void importSharedLibrary(const std::string &name,
                                        const std::vector<std::string> &symbols,
                                        model::Context &context,
                                        model::Namespace *ns
                                        );
-        virtual void registerImport(model::Context &context, 
-                                    model::VarDef *varDef
-                                    );
+        virtual void registerImportedVar(model::Context &context,
+                                         model::VarDef *varDef
+                                         );
 
         virtual void setArgv(int argc, char **argv);        
-        virtual void run();
-        virtual void dump();
         
         // internal functions used by our VarDefImpl to generate the 
         // appropriate variable references.
@@ -319,9 +383,10 @@ class LLVMBuilder : public Builder {
         virtual void emitVTableInit(model::Context &context,
                                     model::TypeDef *typeDef
                                     );
+
+
 };
 
 } // namespace builder::mvll
 } // namespace builder
 #endif
-

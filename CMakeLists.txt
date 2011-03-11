@@ -102,7 +102,7 @@ set_target_properties( crack
                        RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}
                        VERSION ${CRACK_VERSION}
                      )
-                     
+
 target_link_libraries( crack
                        libcrack
                      )
@@ -138,6 +138,10 @@ install(DIRECTORY .libs/ DESTINATION "lib/crack-${CRACK_VERSION}/crack/ext"
 # test suite
 add_custom_target(check 
                   ${PROJECT_SOURCE_DIR}/test/run_all_tests
+                  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+                  )
+add_custom_target(checkc
+                  ${PROJECT_SOURCE_DIR}/test/run_all_tests crackc
                   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
                   )
 

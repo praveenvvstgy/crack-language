@@ -31,7 +31,6 @@
 #include "model/VarDef.h"
 #include "model/VarRef.h"
 #include "builder/Builder.h"
-#include "Crack.h"
 #include "ParseError.h"
 #include <cstdlib>
 #include <stdint.h>
@@ -41,21 +40,30 @@ using namespace parser;
 using namespace model;
 
 void Parser::addDef(VarDef *varDef) {
+   FuncDef *func = FuncDefPtr::cast(varDef);
    ContextPtr defContext = context->getDefContext();
-   defContext->ns->addDef(varDef);
+   VarDefPtr storedDef = defContext->addDef(varDef);
+   
+   // if this was a function that was added to an ancestor context, we need to 
+   // rebuild any intermediate overload definitions.
+   if (func && defContext != context)
+      context->insureOverloadPath(defContext.get(), 
+                                  OverloadDefPtr::arcast(storedDef)
+                                  );
    
    // if the definition context is a class context and the definition is a 
    // function and this isn't the "Class" class (which is its own meta-class), 
    // add it to the meta-class.
-   FuncDef *func;
    TypeDef *type;
-   if (defContext->scope == Context::instance &&
-       (func = FuncDefPtr::cast(varDef))
-       ) {
+   if (defContext->scope == Context::instance && func) {
       type = TypeDefPtr::arcast(defContext->ns);
       if (type != type->type.get())
-         type->type->addAlias(varDef);
+         type->type->addAlias(storedDef.get());
    }
+}
+
+void Parser::addFuncDef(FuncDef *funcDef) {
+   addDef(funcDef);
 }
 
 Token Parser::getToken() {
@@ -105,11 +113,11 @@ FuncDefPtr Parser::lookUpBinOp(const string &name, FuncCall::ExprVec &args) {
    
    // first try to find it in the type's context, then try to find it in 
    // the current context.
-   FuncDefPtr func = args[0]->type->lookUp(*context, name, exprs);
+   FuncDefPtr func = context->lookUp(name, exprs, args[0]->type.get());
    if (!func) {
       exprs[0] = args[0];
       exprs.push_back(args[1]);
-      func = context->ns->lookUp(*context, name, exprs);
+      func = context->lookUp(name, exprs);
    }
 
    args = exprs;
@@ -200,22 +208,33 @@ void Parser::parseClause(bool defsAllowed) {
 }
 
 void Parser::parseAnnotation() {
-   Token tok = toker.getToken();
-   context->setLocation(tok.getLocation());
-
-   // if we get an import keyword, parse the import statement.   
-   if (tok.isImport()) {
-      parseImportStmt(context->compileNS.get());
-      return;
+   AnnotationPtr ann;
+   {
+      // create a new context whose construct is tha annotation construct.
+      ContextPtr parentContext = context;
+      ContextPtr ctx = context->createSubContext(Context::module);
+      ContextStackFrame cstack(*this, ctx.get());
+      context->construct = context->getCompileTimeConstruct();
+   
+      Token tok = toker.getToken();
+      context->setLocation(tok.getLocation());
+   
+      // if we get an import keyword, parse the import statement.   
+      if (tok.isImport()) {
+         parseImportStmt(parentContext->compileNS.get());
+         return;
+      }
+      
+      if (!tok.isIdent())
+         error(tok, "Identifier or import statement expected after '@' sign");
+      
+      // lookup the annotation
+      ann = context->lookUpAnnotation(tok.getData());
+      if (!ann)
+         error(tok, SPUG_FSTR("Undefined annotation " << tok.getData()));
    }
    
-   if (!tok.isIdent())
-      error(tok, "Identifier or import statement expected after '@' sign");
-   
-   // lookup the annotation
-   AnnotationPtr ann = context->lookUpAnnotation(tok.getData());
-   if (!ann)
-      error(tok, SPUG_FSTR("Undefined annotation " << tok.getData()));
+   // invoke in the outer context
    ann->invoke(this, &toker, context.get());
 }
 
@@ -291,6 +310,10 @@ ContextPtr Parser::parseStatement(bool defsAllowed) {
       
       // for statements are like while - never terminal
       return 0;
+   } else if (tok.isThrow()) {
+      return parseThrowStmt();
+   } else if (tok.isTry()) {
+      return parseTryStmt();
    }
 
    toker.putBack(tok);
@@ -492,7 +515,7 @@ FuncCallPtr Parser::parseFuncCall(const Token &ident, const string &funcName,
    
    // lookup the method from the variable context's type context
    // XXX needs to handle callable objects.
-   FuncDefPtr func = ns->lookUp(*context, funcName, args);
+   FuncDefPtr func = context->lookUp(funcName, args, ns);
    if (!func)
       error(ident, SPUG_FSTR("No method exists matching " << funcName << 
                               "(" << args << ")"));
@@ -654,7 +677,7 @@ ExprPtr Parser::parseIString(Expr *expr) {
    result->handleTransient(*context);
    
    // put the whole thing in an "if"
-   TypeDef *boolType = context->globalData->boolType.get();
+   TypeDef *boolType = context->construct->boolType.get();
    ExprPtr cond = result->convert(*context, boolType);
    if (!cond)
       context->error("interpolated string target can not be converted to a "
@@ -687,7 +710,7 @@ ExprPtr Parser::parseIString(Expr *expr) {
       // look up a format method for the argument
       FuncCall::ExprVec args(1);
       args[0] = arg;
-      FuncDefPtr func = expr->type->lookUp(*context, "format", args);
+      FuncDefPtr func = context->lookUp("format", args, expr->type.get());
       if (!func)
          error(tok, 
                SPUG_FSTR("No format method exists for objects of type " <<
@@ -736,7 +759,7 @@ ExprPtr Parser::parseSecondary(Expr *expr0, unsigned precedence) {
 	 // if the next token is "class", this is the class operator.
 	 if (tok.isClass()) {
             FuncDefPtr funcDef = 
-               expr->type->lookUpNoArgs("oper class");
+               context->lookUpNoArgs("oper class", true, expr->type.get());
             if (!funcDef)
                error(tok, SPUG_FSTR("class operator not defined for " <<
                                     expr->type->name
@@ -791,7 +814,7 @@ ExprPtr Parser::parseSecondary(Expr *expr0, unsigned precedence) {
             // this is "a[i] = v"
             args.push_back(parseExpression());
             FuncDefPtr funcDef =
-               expr->type->lookUp(*context, "oper []=", args);
+               context->lookUp("oper []=", args, expr->type.get());
             if (!funcDef)
                error(tok, 
                      SPUG_FSTR("'oper []=' not defined for " <<
@@ -805,7 +828,7 @@ ExprPtr Parser::parseSecondary(Expr *expr0, unsigned precedence) {
             // this is "a[i]"
             toker.putBack(tok2);
             FuncDefPtr funcDef =
-               expr->type->lookUp(*context, "oper []", args);
+               context->lookUp("oper []", args, expr->type.get());
             if (!funcDef)
                error(tok, SPUG_FSTR("'oper []=' not defined for " <<
                                      expr->type->name << 
@@ -823,10 +846,10 @@ ExprPtr Parser::parseSecondary(Expr *expr0, unsigned precedence) {
          
          FuncCall::ExprVec args;
          string symbol = "oper x" + tok.getData();
-         FuncDefPtr funcDef = expr->type->lookUp(*context, symbol, args);
+         FuncDefPtr funcDef = context->lookUp(symbol, args, expr->type.get());
          if (!funcDef) {
             args.push_back(expr);
-            funcDef = context->ns->lookUp(*context, symbol, args);
+            funcDef = context->lookUp(symbol, args);
          }
          if (!funcDef)
             error(tok, SPUG_FSTR(symbol << " is not defined for type "
@@ -929,7 +952,7 @@ ExprPtr Parser::parseExpression(unsigned precedence, bool unaryMinus) {
    // check for null
    Token tok = getToken();
    if (tok.isNull()) {
-      expr = new NullConst(context->globalData->voidptrType.get());
+      expr = new NullConst(context->construct->voidptrType.get());
    
    // check for a nested parenthesized expression
    } else if (tok.isLParen()) {
@@ -1016,10 +1039,12 @@ ExprPtr Parser::parseExpression(unsigned precedence, bool unaryMinus) {
          symbol = "oper " + symbol;
          if (tok.isIncr() || tok.isDecr())
             symbol += "x";
-         FuncDefPtr funcDef = operand->type->lookUp(*context, symbol, args);
+         FuncDefPtr funcDef = context->lookUp(symbol, args, 
+                                              operand->type.get()
+                                              );
          if (!funcDef) {
             args.push_back(operand);
-            funcDef = context->ns->lookUp(*context, symbol, args);
+            funcDef = context->lookUp(symbol, args);
          }
          if (!funcDef)
             error(tok, SPUG_FSTR(symbol << " is not defined for type "
@@ -1106,7 +1131,7 @@ ExprPtr Parser::parseConstructor(const Token &tok, TypeDef *type,
    parseMethodArgs(args, terminator);
    
    // look up the new operator for the class
-   FuncDefPtr func = type->lookUp(*context, "oper new", args);
+   FuncDefPtr func = context->lookUp("oper new", args, type);
    if (!func)
       error(tok, SPUG_FSTR("No constructor for " << type->name <<
                            " with these argument types: (" << args << ")"));
@@ -1234,8 +1259,7 @@ void Parser::parseInitializers(Initializers *inits, Expr *receiver) {
          parseMethodArgs(args);
          
          // look up the appropriate constructor
-         FuncDefPtr operInit = 
-            base->lookUp(*context, "oper init", args);
+         FuncDefPtr operInit = context->lookUp("oper init", args, base.get());
          if (!operInit || operInit->getOwner() != base.get())
             error(tok, SPUG_FSTR("No matching constructor found for " <<
                                   base->getFullName()
@@ -1281,7 +1305,7 @@ void Parser::parseInitializers(Initializers *inits, Expr *receiver) {
             
             // look up the appropriate constructor
             FuncDefPtr operNew = 
-               varDef->type->lookUp(*context, "oper new", args);
+               context->lookUp("oper new", args, varDef->type.get());
             if (!operNew)
                error(tok2,
                      SPUG_FSTR("No matching constructor found for instance "
@@ -1349,7 +1373,9 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
    TypeDef *classTypeDef = 0;
    
    // push a new context, arg defs will be stored in the new context.
-   ContextPtr subCtx = context->createSubContext(Context::local);
+   ContextPtr subCtx = context->createSubContext(Context::local, 0,
+                                                 &name
+                                                 );
    ContextStackFrame cstack(*this, subCtx.get());
    context->returnType = returnType;
    context->toplevel = true;
@@ -1388,7 +1414,6 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
 
    // we now need to verify that the new definition doesn't hide an 
    // existing definition.
-   FuncDef *existingFuncDef = FuncDefPtr::rcast(existingDef);
    OverloadDef *existingOvldDef = OverloadDefPtr::rcast(existingDef);
    if (existingOvldDef && 
       (override = existingOvldDef->getSigMatch(argDefs)) &&
@@ -1435,11 +1460,21 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
                                               returnType,
                                               0,
                                               argDefs,
-                                              stub->address
+                                              stub->address,
+                                              name.c_str()
                                               );
          stub->getOwner()->removeDef(stub);
          cstack.restore();
-         addDef(funcDef.get());
+         addFuncDef(funcDef.get());
+      } else if (override) {
+         // forward declarations of overrides don't make any sense.
+         warn(tok3, SPUG_FSTR("Unnecessary forward declaration for overriden "
+                               "function " << name << " (defined in ancestor "
+                               "class " << 
+                               override->getOwner()->getNamespaceName() <<
+                               ")"
+                              )
+              );
       } else {
          // it's a forward declaration
          funcDef = context->builder.createFuncForward(*context, 
@@ -1452,7 +1487,7 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
                                                       );
 
          cstack.restore();
-         addDef(funcDef.get());
+         addFuncDef(funcDef.get());
 
          // if this is a constructor, and the user hasn't introduced their own 
          // "oper new", generate one for the new constructor now.
@@ -1504,7 +1539,7 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
    // there (if there was a forward declaration)
    if (!funcDef->getOwner()) {
       ContextStackFrame cstack(*this, context->getParent().get());
-      addDef(funcDef.get());
+      addFuncDef(funcDef.get());
    }
 
    // if there were initializers, emit them.
@@ -1526,7 +1561,7 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
    // if the block doesn't always terminate, either give an error or 
    // return void if the function return type is void
    if (!terminal)
-      if (context->globalData->voidType->matches(*context->returnType)) {
+      if (context->construct->voidType->matches(*context->returnType)) {
          // remove the cleanup stack - we have already done cleanups at 
          // the block level.
          context->cleanupFrame = 0;
@@ -1673,7 +1708,7 @@ ContextPtr Parser::parseIfClause() {
 }
    
 ExprPtr Parser::parseCondExpr() {
-   TypeDef *boolType = context->globalData->boolType.get();
+   TypeDef *boolType = context->construct->boolType.get();
    ExprPtr cond = parseExpression()->convert(*context, boolType);
    if (!cond)
       error(getToken(),  "Condition is not boolean.");
@@ -1836,7 +1871,7 @@ void Parser::parseForStmt() {
       tok = getToken();
       if (tok.isSemi()) {
          // no conditional, create one from a constant
-         TypeDef *boolType = context->globalData->boolType.get();
+         TypeDef *boolType = context->construct->boolType.get();
          cond = context->builder.createIntConst(*context, 1)->convert(*context,
                                                                      boolType
                                                                      );
@@ -1904,7 +1939,7 @@ void Parser::parseReturnStmt() {
       returnVoid = true;
    }
    if (returnVoid) {
-      if (!context->returnType->matches(*context->globalData->voidType))
+      if (!context->returnType->matches(*context->construct->voidType))
          error(tok,
                SPUG_FSTR("Missing return expression for function "
                           "returning " << context->returnType->name
@@ -1915,7 +1950,7 @@ void Parser::parseReturnStmt() {
    }
    // if return type is void, but they are trying to return an expression,
    // fail with message
-   else if (context->returnType == context->globalData->voidType) {
+   else if (context->returnType == context->construct->voidType) {
       error(tok,
             SPUG_FSTR("Cannot return expression from function "
                       "with return type void")
@@ -1933,7 +1968,7 @@ void Parser::parseReturnStmt() {
                       )
             );
    else if (!expr && 
-            !context->globalData->voidType->matches(*context->returnType))
+            !context->construct->voidType->matches(*context->returnType))
       error(tok,
             SPUG_FSTR("Missing return value for function returning " <<
                        context->returnType->name
@@ -1960,7 +1995,11 @@ void Parser::parseImportStmt(Namespace *ns) {
       toker.putBack(tok);
       vector<string> moduleName;
       parseModuleName(moduleName);
-      mod = Crack::loadModule(moduleName, canonicalName);
+            
+      mod = context->construct->loadModule(moduleName.begin(), 
+                                           moduleName.end(),
+                                           canonicalName
+                                           );
       if (!mod)
          error(tok, SPUG_FSTR("unable to find module " << canonicalName));
       
@@ -1971,6 +2010,10 @@ void Parser::parseImportStmt(Namespace *ns) {
                           " recursively."
                          )
                );
+      else
+          context->builder.initializeImport(mod,
+                                            // HACK check for annotation?
+                                            ns == context->compileNS.get());
 
    } else if (!tok.isString()) {
       unexpected(tok, "expected string constant");
@@ -1999,7 +2042,10 @@ void Parser::parseImportStmt(Namespace *ns) {
 
    if (!mod) {
       try {
-         context->builder.loadSharedLibrary(name, syms, *context, ns);
+         context->construct->rootBuilder->importSharedLibrary(name, syms,
+                                                            *context,
+                                                            ns
+                                                            );
       } catch (const spug::Exception &ex) {
          error(tok, ex.getMessage());
       }
@@ -2010,7 +2056,7 @@ void Parser::parseImportStmt(Namespace *ns) {
            ++iter
            ) {
          // make sure we don't already have it
-         if (context->ns->lookUp(*iter))
+         if (ns->lookUp(*iter))
             error(tok, SPUG_FSTR("imported name " << *iter << 
                                   " hides existing definition."
                                  )
@@ -2022,10 +2068,124 @@ void Parser::parseImportStmt(Namespace *ns) {
                                   canonicalName
                                  )
                   );
-         context->builder.registerImport(*context, symVal.get());
+         context->builder.registerImportedVar(*context, symVal.get());
          ns->addAlias(symVal.get());
       }
    }
+}
+
+// try { ... } catch (...) { ... }
+//    ^                           ^
+ContextPtr Parser::parseTryStmt() {
+   Token tok = toker.getToken();
+   if (!tok.isLCurly())
+      unexpected(tok, "Curly bracket expected after try.");
+   
+   BranchpointPtr pos = context->builder.emitBeginTry(*context);
+
+   // create a subcontext for the try statement
+   ContextStackFrame cstack(*this, context->createSubContext().get());
+   context->setCatchBranchpoint(pos.get());
+
+   ContextPtr terminal;
+   {
+      ContextStackFrame cstack(*this, context->createSubContext().get());
+      terminal = parseBlock(true, noCallbacks); // XXX add tryLeave callback
+   }
+   bool lastWasTerminal = terminal;
+   
+   tok = toker.getToken();
+   if (!tok.isCatch())
+      unexpected(tok, "catch expected after try block.");
+   
+   while (true) {
+      
+      // parse the exception specifier
+      tok = toker.getToken();
+      if (!tok.isLParen())
+         unexpected(tok, 
+                    "parenthesized catch expression expected after catch "
+                     "keyword."
+                    );
+
+      TypeDefPtr exceptionType = parseTypeSpec();
+      
+      // parse the exception variable
+      Token varTok = toker.getToken();
+      if (!varTok.isIdent())
+         unexpected(tok, "variable name expected after exception type.");
+
+      ExprPtr exceptionObj =
+         context->builder.emitCatch(*context, pos.get(), exceptionType.get(),
+                                    lastWasTerminal
+                                    );
+      
+      tok = toker.getToken();
+      if (!tok.isRParen())
+         unexpected(tok, 
+                    "closing parenthesis expected after exception variable."
+                    );
+      
+      // parse the catch body
+      tok = toker.getToken();
+      if (!tok.isLCurly())
+         unexpected(tok,
+                    "Curly bracket expected after catch clause."
+                    );
+      
+      {
+         ContextStackFrame cstack(*this, context->createSubContext().get());
+         
+         // create a variable definition for the exception variable
+         context->emitVarDef(exceptionType.get(), varTok, exceptionObj.get());
+         
+         // XXX add catchLeave callback
+         ContextPtr terminalCatch = parseBlock(true, noCallbacks); 
+         lastWasTerminal = terminalCatch;
+         if (terminalCatch) {
+            if (terminal && terminal->encloses(*terminalCatch))
+               // need to replace the terminal context to the closer terminal 
+               // context for the catch
+               terminal = terminalCatch;
+         } else {
+            // non-terminal catch, therefore the entire try/catch statement 
+            // is not terminal.
+            terminal = 0;
+         }
+      }
+      
+      // see if there's another catch
+      tok = toker.getToken();
+      if (!tok.isCatch()) {
+         toker.putBack(tok);
+         context->builder.emitEndTry(*context, pos.get(), lastWasTerminal);
+         return terminal;
+      }
+   }
+}
+
+ContextPtr Parser::parseThrowStmt() {
+   Token tok = toker.getToken();
+   if (tok.isSemi()) {
+      // XXX need to verify that we are in a catch
+      context->builder.emitThrow(*context, 0);
+   } else {
+      toker.putBack(tok);
+      ExprPtr expr = parseExpression();
+      
+      tok = toker.getToken();
+      if (!tok.isSemi())
+         unexpected(tok, "Semicolon expected after throw expression.");
+      
+      context->builder.emitThrow(*context, expr.get());
+   }
+
+   // get the terminal context - if it's a toplevel context, we actually want 
+   // to go one step further up.
+   ContextPtr terminal = context->getCatch();
+   if (terminal->toplevel)
+      terminal = terminal->parent;
+   return terminal;
 }
 
 // oper name ( args ) { ... }
@@ -2049,8 +2209,8 @@ void Parser::parsePostOper(TypeDef *returnType) {
          // these opers must be of type "void"
          if (!returnType)
             context->returnType = returnType =
-               context->globalData->voidType.get();
-         else if (returnType != context->globalData->voidType.get())
+               context->construct->voidType.get();
+         else if (returnType != context->construct->voidType.get())
             error(tok, 
                   SPUG_FSTR("oper " << ident << 
                             " must be of return type 'void'"
@@ -2206,8 +2366,8 @@ TypeDefPtr Parser::parseClassDef() {
    
    // if no base classes were specified, and Object has been defined, make 
    // Object the implicit base class.
-   if (!bases.size() && context->globalData->objectType)
-      bases.push_back(context->globalData->objectType);
+   if (!bases.size() && context->construct->objectType)
+      bases.push_back(context->construct->objectType);
 
    // create a class context
    ContextPtr classContext =
@@ -2222,7 +2382,7 @@ TypeDefPtr Parser::parseClassDef() {
                                       existing.get()
                                       );
    if (!existing)
-      context->ns->addDef(type.get());
+      addDef(type.get());
    
    // add the "cast" method
    if (type->hasVTable)
@@ -2355,7 +2515,7 @@ VarDefPtr Parser::checkForExistingDef(const Token &tok, const string &name,
                                       bool overloadOk
                                       ) {
    ContextPtr classContext;
-   VarDefPtr existing = context->ns->lookUp(name);
+   VarDefPtr existing = context->lookUp(name);
    if (existing) {
       Namespace *existingNS = existing->getOwner();
       TypeDef *existingClass = 0;

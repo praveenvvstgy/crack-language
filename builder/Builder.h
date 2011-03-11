@@ -1,4 +1,4 @@
-// Copyright 2009 Google Inc.
+// Copyright 2009-2011 Google Inc., Shannon Weyrick <weyrick@mozek.us>
 
 #ifndef _builder_Builder_h_
 #define _builder_Builder_h_
@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <spug/RCPtr.h>
 
+#include "BuilderOptions.h"
 #include "model/FuncCall.h" // for FuncCall::ExprVec
 #include "model/FuncDef.h" // for FuncDef::Flags
 
@@ -37,11 +38,10 @@ SPUG_RCPTR(Builder);
 /** Abstract base class for builders.  Builders generate code. */
 class Builder : public spug::RCBase {
 
-    protected:
-        int optimizeLevel;
-
     public:
-        Builder(): optimizeLevel(0) { }
+        BuilderOptionsPtr options;
+
+        Builder(): options(0) { }
 
         /**
          * This gets called on the "root builder" everytime a new module gets 
@@ -241,7 +241,8 @@ class Builder : public spug::RCBase {
                              model::TypeDef *returnType,
                              model::TypeDef *receiverType,
                              const std::vector<model::ArgDefPtr> &args,
-                             void *cfunc
+                             void *cfunc,
+                             const char *symbolName=0
                              ) = 0;
         
         /**
@@ -267,6 +268,49 @@ class Builder : public spug::RCBase {
          */
         virtual void emitReturn(model::Context &context,
                                 model::Expr *expr) = 0;
+
+        /**
+         * Emit the beginning of a try block.  Try/catch statements are 
+         * roughly emitted as:
+         *  bpos = emitBeginTry()
+         *  emitCatch(bpos)
+         *  emitCatch(bpos)
+         *  emitEndTry(bpos);
+         */
+        virtual model::BranchpointPtr emitBeginTry(model::Context &context
+                                                   ) = 0;
+        
+        /**
+         * Emit a catch clause.
+         * 'context' should be a context that was marked as a catch 
+         * context using setCatchBranchpoint() for the code between 
+         * emitBeginTry() and the first emitCatch().
+         * @param terminal true if the last catch block (or try block for the 
+         *  first catch) is terminal.
+         * @returns an expression that can be used to initialize the exception 
+         *  variable.
+         */
+        virtual model::ExprPtr emitCatch(model::Context &context,
+                                         model::Branchpoint *branchpoint,
+                                         model::TypeDef *catchType,
+                                         bool terminal
+                                         ) = 0;
+        
+        /**
+         * Close off an existing try block.
+         * The rules for 'context' in emitCatch() apply.
+         * @param terminal true if the last catch block (or try block for the 
+         *  first catch) is terminal.
+         */
+        virtual void emitEndTry(model::Context &context,
+                                model::Branchpoint *branchpoint,
+                                bool terminal
+                                ) = 0;
+    
+        /** Emit an exception "throw" */
+        virtual void emitThrow(model::Context &context,
+                               model::Expr *expr
+                               ) = 0;
 
         /**
          * Emits a variable definition and returns a new VarDef object for the 
@@ -321,9 +365,9 @@ class Builder : public spug::RCBase {
                                                      ) = 0;
 
         virtual model::ModuleDefPtr createModule(model::Context &context,
-                                                 const std::string &name,
-                                                 bool emitDebugInfo = false
+                                                 const std::string &name
                                                  ) = 0;
+
         virtual void closeModule(model::Context &context,
                                  model::ModuleDef *modDef
                                  ) = 0;
@@ -364,41 +408,58 @@ class Builder : public spug::RCBase {
                                                       ) = 0;
 
         /**
-         * Load the named shared library, store the addresses for the symbols 
+         * Load the named shared library, returning a handle suitable for
+         * retrieving symbols from the library using the local mechanism
+         */
+        virtual void *loadSharedLibrary(const std::string &name) = 0;
+
+        /**
+         * Load the named shared library, store the addresses for the symbols
          * as StubDef's in 'context'.
          */
-        virtual void loadSharedLibrary(const std::string &name,
-                                       const std::vector<std::string> &symbols,
-                                       model::Context &context,
-                                       model::Namespace *ns
-                                       ) = 0;
-        
+        virtual void importSharedLibrary(const std::string &name,
+                                         const std::vector<std::string> &symbols,
+                                         model::Context &context,
+                                         model::Namespace *ns
+                                         ) = 0;
+
         /**
          * This is called for every symbol that is imported into a module.  
          * Implementations should do whatever processing is necessary.
          */
-        virtual void registerImport(model::Context &context, 
-                                    model::VarDef *varDef
-                                    ) = 0;
+        virtual void registerImportedVar(model::Context &context,
+                                         model::VarDef *varDef
+                                         ) = 0;
+
+        /**
+         * This is called once per imported module, to allow the builder
+         * to emit any required initialization instructions for the imported
+         * module, i.e. to emit a call to run its top level code
+         */
+        virtual void initializeImport(model::ModuleDefPtr, bool annotation) = 0;
 
         /**
          * Provides the builder with access to the program's argument list.
          */
         virtual void setArgv(int argc, char **argv) = 0;
-        
-        virtual void run() = 0;
-        
-        /// Dump the compiled op-codes to standard output.
-        virtual void dump() = 0;
+
+        /**
+         * Called after all modules have been parsed/run. Only called
+         * on root builder, not children
+         */
+        virtual void finishBuild(model::Context &context) = 0;
+
+        /**
+         * If a builder can directly execute functions from modules it builds,
+         * e.g. via JIT, then this will return true
+         */
+        virtual bool isExec() = 0;
 
         // XXX hack to emit all vtable initializers until we get constructor 
         // composition.
         virtual void emitVTableInit(model::Context &context,
                                     model::TypeDef *typeDef
                                     ) = 0;
-
-        // implementation specific optimization level
-        void setOptimize(int level) { optimizeLevel = level; }
 
 };
 

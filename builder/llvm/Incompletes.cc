@@ -1,11 +1,17 @@
 // Copyright 2010 Google Inc, Shannon Weyrick <weyrick@mozek.us>
 
 #include "Incompletes.h"
+
+#include <llvm/LLVMContext.h>
 #include "BTypeDef.h"
 #include "BFuncDef.h"
 #include "LLVMBuilder.h"
+#include "Utils.h"
 
 #include <map>
+
+#include "llvm/GlobalValue.h"  // XXX for getting a module
+#include "llvm/Module.h"  // XXX for getting a module
 
 using namespace llvm;
 using namespace model;
@@ -125,6 +131,65 @@ void IncompleteInstVarAssign::insertInstructions(IRBuilder<> &builder) {
     Value *fieldPtr = builder.CreateStructGEP(Op<0>(), index);
     builder.CreateStore(Op<1>(), fieldPtr);
 }
+
+// IncompleteCatchSelector
+void *IncompleteCatchSelector::operator new(size_t s) {
+    return User::operator new(s, 0);
+}
+
+IncompleteCatchSelector::IncompleteCatchSelector(Value *ehSelector,
+                                                 Value *exception, 
+                                                 Value *personalityFunc,
+                                                 BasicBlock *parent
+                                                 ) :
+    PlaceholderInstruction(
+        Type::getInt32Ty(getGlobalContext()),
+        parent,
+        OperandTraits<IncompleteCatchSelector>::op_begin(this),
+        OperandTraits<IncompleteCatchSelector>::operands(this)
+    ),
+    ehSelector(ehSelector),
+    exception(exception),
+    personalityFunc(personalityFunc),
+    typeImpls(0) {
+}
+
+IncompleteCatchSelector::IncompleteCatchSelector(Value *ehSelector,
+                                                 Value *exception,
+                                                 Value *personalityFunc,
+                                                 Instruction *insertBefore
+                                                 ) :
+    PlaceholderInstruction(
+        Type::getInt32Ty(getGlobalContext()),
+        insertBefore,
+        OperandTraits<IncompleteCatchSelector>::op_begin(this),
+        OperandTraits<IncompleteCatchSelector>::operands(this)
+    ),
+    ehSelector(ehSelector),
+    exception(exception),
+    personalityFunc(personalityFunc),
+    typeImpls(0) {
+}
+
+IncompleteCatchSelector::~IncompleteCatchSelector() {
+}
+
+Instruction *IncompleteCatchSelector::clone_impl() const {
+    return new IncompleteCatchSelector(ehSelector, exception, personalityFunc);
+}
+
+void IncompleteCatchSelector::insertInstructions(IRBuilder<> &builder) {
+    vector<Value *> args(3 + typeImpls->size());
+    args[0] = exception;
+    args[1] = personalityFunc;
+    int i;
+    for (i = 0; i < typeImpls->size(); ++i)
+        args[i + 2] = (*typeImpls)[i];
+    args[i + 2] = Constant::getNullValue(builder.getInt8Ty()->getPointerTo());
+    replaceAllUsesWith(
+        builder.CreateCall(ehSelector, args.begin(), args.end())
+    );
+}    
 
 // IncompleteNarrower
 void * IncompleteNarrower::operator new(size_t s) {
@@ -371,12 +436,14 @@ Value * IncompleteVirtualFunc::getVTableReference(IRBuilder<> &builder,
     }
 }
 
-Value * IncompleteVirtualFunc::innerEmitCall(IRBuilder<> &builder,
-                                             BTypeDef *vtableBaseType,
-                                             BFuncDef *funcDef,
-                                             Value *receiver,
-                                             const vector<Value *> &args
-                                             ) {
+Value *IncompleteVirtualFunc::innerEmitCall(IRBuilder<> &builder,
+                                            BTypeDef *vtableBaseType,
+                                            BFuncDef *funcDef,
+                                            Value *receiver,
+                                            const vector<Value *> &args,
+                                            BasicBlock *normalDest,
+                                            BasicBlock *unwindDest
+                                            ) {
 
     BTypeDef *receiverType =
             BTypeDefPtr::acast(funcDef->getReceiverType());
@@ -395,9 +462,10 @@ Value * IncompleteVirtualFunc::innerEmitCall(IRBuilder<> &builder,
     Value *funcFieldRef =
             builder.CreateStructGEP(vtable, funcDef->vtableSlot);
     Value *funcPtr = builder.CreateLoad(funcFieldRef);
-    Value *result = builder.CreateCall(funcPtr, args.begin(),
-                                       args.end()
-                                       );
+    Value *result = builder.CreateInvoke(funcPtr, normalDest, unwindDest,
+                                         args.begin(), 
+                                         args.end()
+                                         );
     return result;
 }
 
@@ -409,13 +477,15 @@ void IncompleteVirtualFunc::init(Value *receiver, const vector<Value *> &args) {
         OperandList[i + 1] = args[i];
 }
 
-IncompleteVirtualFunc::IncompleteVirtualFunc
-                         (BTypeDef *vtableBaseType,
-                          BFuncDef *funcDef,
-                          Value *receiver,
-                          const vector<Value *> &args,
-                          BasicBlock *parent
-                          ) :
+IncompleteVirtualFunc::IncompleteVirtualFunc(
+    BTypeDef *vtableBaseType,
+    BFuncDef *funcDef,
+    Value *receiver,
+    const vector<Value *> &args,
+    BasicBlock *parent,
+    BasicBlock *normalDest,
+    BasicBlock *unwindDest
+) :
     PlaceholderInstruction(
             BTypeDefPtr::arcast(funcDef->returnType)->rep,
             parent,
@@ -424,17 +494,21 @@ IncompleteVirtualFunc::IncompleteVirtualFunc
             args.size() + 1
             ),
     vtableBaseType(vtableBaseType),
-    funcDef(funcDef) {
+    funcDef(funcDef),
+    normalDest(normalDest),
+    unwindDest(unwindDest) {
     init(receiver, args);
 }
 
-IncompleteVirtualFunc::IncompleteVirtualFunc
-            (BTypeDef *vtableBaseType,
-             BFuncDef *funcDef,
-             Value *receiver,
-             const vector<Value *> &args,
-             Instruction *insertBefore
-                                         ) :
+IncompleteVirtualFunc::IncompleteVirtualFunc(
+    BTypeDef *vtableBaseType,
+    BFuncDef *funcDef,
+    Value *receiver,
+    const vector<Value *> &args,
+    BasicBlock *normalDest,
+    BasicBlock *unwindDest,
+    Instruction *insertBefore
+) :
     PlaceholderInstruction(
             BTypeDefPtr::arcast(funcDef->returnType)->rep,
             insertBefore,
@@ -443,16 +517,21 @@ IncompleteVirtualFunc::IncompleteVirtualFunc
             args.size() + 1
             ),
     vtableBaseType(vtableBaseType),
-    funcDef(funcDef) {
+    funcDef(funcDef),
+    normalDest(normalDest),
+    unwindDest(unwindDest) {
 
     init(receiver, args);
 }
 
-IncompleteVirtualFunc::IncompleteVirtualFunc(BTypeDef *vtableBaseType,
+IncompleteVirtualFunc::IncompleteVirtualFunc(
+    BTypeDef *vtableBaseType,
     BFuncDef *funcDef,
     Use *operands,
-    unsigned numOperands
-    ) :
+    unsigned numOperands,
+    BasicBlock *normalDest,
+    BasicBlock *unwindDest
+) :
     PlaceholderInstruction(
             BTypeDefPtr::arcast(funcDef->returnType)->rep,
             static_cast<Instruction *>(0),
@@ -460,7 +539,9 @@ IncompleteVirtualFunc::IncompleteVirtualFunc(BTypeDef *vtableBaseType,
             numOperands
             ),
     vtableBaseType(vtableBaseType),
-    funcDef(funcDef) {
+    funcDef(funcDef),
+    normalDest(normalDest),
+    unwindDest(unwindDest) {
 
     for (int i = 0; i < numOperands; ++i)
         OperandList[i] = operands[i];
@@ -470,7 +551,9 @@ Instruction * IncompleteVirtualFunc::clone_impl() const {
     return new(NumOperands) IncompleteVirtualFunc(vtableBaseType,
                                                   funcDef,
                                                   OperandList,
-                                                  NumOperands
+                                                  NumOperands,
+                                                  normalDest,
+                                                  unwindDest
                                                   );
 }
 
@@ -481,21 +564,25 @@ void IncompleteVirtualFunc::insertInstructions(IRBuilder<> &builder) {
     Value *callInst =
             innerEmitCall(builder, vtableBaseType, funcDef,
                           OperandList[0],
-                          args
+                          args,
+                          normalDest,
+                          unwindDest
                           );
     replaceAllUsesWith(callInst);
 }
 
 Value * IncompleteVirtualFunc::emitCall(Context &context,
-                                               BFuncDef *funcDef,
-                                               Value *receiver,
-                                               const vector<Value *> &args
+                                        BFuncDef *funcDef,
+                                        Value *receiver,
+                                        const vector<Value *> &args,
+                                        BasicBlock *normalDest,
+                                        BasicBlock *unwindDest       
                                                ) {
     // do some conversions that we need to do either way.
     LLVMBuilder &llvmBuilder =
             dynamic_cast<LLVMBuilder &>(context.builder);
     BTypeDef *vtableBaseType =
-            BTypeDefPtr::arcast(context.globalData->vtableBaseType);
+            BTypeDefPtr::arcast(context.construct->vtableBaseType);
     BTypeDef *type = BTypeDefPtr::acast(funcDef->getOwner());
 
     // if this is for a complete class, go ahead and emit the code.
@@ -505,7 +592,9 @@ Value * IncompleteVirtualFunc::emitCall(Context &context,
                                    vtableBaseType,
                                    funcDef,
                                    receiver,
-                                   args
+                                   args,
+                                   normalDest,
+                                   unwindDest
                                    );
         return val;
     } else {
@@ -515,7 +604,9 @@ Value * IncompleteVirtualFunc::emitCall(Context &context,
                         funcDef,
                         receiver,
                         args,
-                        llvmBuilder.block
+                        llvmBuilder.builder.GetInsertBlock(),
+                        normalDest,
+                        unwindDest
                         );
         type->addPlaceholder(placeholder);
         return placeholder;
@@ -624,11 +715,10 @@ Value *IncompleteSpecialize::emitSpecialize(
         PlaceholderInstruction *placeholder =
             new IncompleteSpecialize(type->rep, value,
                                      ancestorPath,
-                                     llvmBuilder.block
+                                     llvmBuilder.builder.GetInsertBlock()
                                      );
         type->addPlaceholder(placeholder);
         return placeholder;
     }
 
 }
-

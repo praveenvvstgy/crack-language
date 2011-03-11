@@ -17,6 +17,7 @@ namespace builder { namespace mvll {
 
     class IncompleteInstVarRef;
     class IncompleteInstVarAssign;
+    class IncompleteCatchSelector;
     class IncompleteNarrower;
     class IncompleteVTableInit;
     class IncompleteSpecialize;
@@ -31,6 +32,10 @@ namespace llvm {
     template<>
     struct OperandTraits<builder::mvll::IncompleteInstVarAssign> :
         FixedNumOperandTraits<2> {
+    };
+    template<>
+    struct OperandTraits<builder::mvll::IncompleteCatchSelector> :
+        FixedNumOperandTraits<0> {
     };
     template<>
     struct OperandTraits<builder::mvll::IncompleteNarrower> :
@@ -107,6 +112,41 @@ public:
                             llvm::Value *rval,
                             llvm::Instruction *insertBefore = 0
                                                         );
+
+    virtual llvm::Instruction *clone_impl() const;
+
+    virtual void insertInstructions(llvm::IRBuilder<> &builder);
+};
+
+class IncompleteCatchSelector : public PlaceholderInstruction {
+private:
+    llvm::Value *ehSelector, *exception, *personalityFunc;
+
+public:
+    // pointers to the type implementation globals, which are set on 
+    // completion of the catch clause.
+    std::vector<llvm::Value *> *typeImpls;
+
+    // allocate space for 0 operands
+    // NOTE: We don't make use of any of the operand magic because none of the 
+    // associated value objects should be replacable.  If you start seeing 
+    // value breakage in the exception selectors, look here because that 
+    // assumption has probably been violated.
+    void *operator new(size_t s);
+
+    IncompleteCatchSelector(llvm::Value *ehSelector,
+                            llvm::Value *exception,
+                            llvm::Value *personalityFunc,
+                            llvm::BasicBlock *parent
+                            );
+
+    IncompleteCatchSelector(llvm::Value *ehSelector,
+                            llvm::Value *exception,
+                            llvm::Value *personalityFunc,
+                            llvm::Instruction *insertBefore = 0
+                            );
+
+    ~IncompleteCatchSelector();
 
     virtual llvm::Instruction *clone_impl() const;
 
@@ -198,6 +238,7 @@ class IncompleteVirtualFunc : public PlaceholderInstruction {
 private:
     BTypeDef *vtableBaseType;
     BFuncDef *funcDef;
+    llvm::BasicBlock *normalDest, *unwindDest;
 
     /**
      * Returns the first vtable pointer in the instance layout, casted
@@ -222,7 +263,9 @@ private:
                                       BTypeDef *vtableBaseType,
                                       BFuncDef *funcDef,
                                       llvm::Value *receiver,
-                                      const std::vector<llvm::Value *> &args
+                                      const std::vector<llvm::Value *> &args,
+                                      llvm::BasicBlock *normalDest,
+                                      llvm::BasicBlock *unwindDest
                                       );
 
     void init(llvm::Value *receiver, const std::vector<llvm::Value *> &args);
@@ -231,20 +274,26 @@ private:
                           BFuncDef *funcDef,
                           llvm::Value *receiver,
                           const std::vector<llvm::Value *> &args,
-                          llvm::BasicBlock *parent
+                          llvm::BasicBlock *parent,
+                          llvm::BasicBlock *normalDest,
+                          llvm::BasicBlock *unwindDest
                           );
 
     IncompleteVirtualFunc(BTypeDef *vtableBaseType,
                           BFuncDef *funcDef,
                           llvm::Value *receiver,
                           const std::vector<llvm::Value *> &args,
+                          llvm::BasicBlock *normalDest,
+                          llvm::BasicBlock *unwindDest,
                           llvm::Instruction *insertBefore = 0
-                                                      );
+                          );
 
     IncompleteVirtualFunc(BTypeDef *vtableBaseType,
                           BFuncDef *funcDef,
                           llvm::Use *operands,
-                          unsigned numOperands
+                          unsigned numOperands,
+                          llvm::BasicBlock *normalDest,
+                          llvm::BasicBlock *unwindDest
                           );
 
 public:
@@ -256,7 +305,9 @@ public:
     static llvm::Value *emitCall(model::Context &context,
                                  BFuncDef *funcDef,
                                  llvm::Value *receiver,
-                                 const std::vector<llvm::Value *> &args
+                                 const std::vector<llvm::Value *> &args,
+                                 llvm::BasicBlock *normalDest,
+                                 llvm::BasicBlock *unwindDest
                                  );
 
 };
