@@ -31,8 +31,8 @@ for line in src:
         dst.write(line)
 __eof__
 # --- end of embedded python ---
-
-if [ ! -e ltmain.sh ]; then libtoolize; fi
+if `which libtoolize`; then lt=libtoolize; elif `which glibtoolize`; then lt=glibtoolize; else echo "no libtoolize"; exit 1; fi
+if [ ! -e ltmain.sh ]; then $lt; fi
 aclocal -I m4 --install
 autoconf
 autoheader

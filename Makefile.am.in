@@ -145,7 +145,7 @@ EXTRA_DIST = doc lib test Credits CMakeLists.txt sourceModules.txt \
 
 bin_PROGRAMS = crack
 
-crack_SOURCES = crack.cc
+crack_SOURCES = crack_main.cc
 crack_LDADD = libCrackLang.la $(LDFLAGS)
 
 # install under prefix/lib instead of libdir so it's not platform dependent.
