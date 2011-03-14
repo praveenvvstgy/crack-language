@@ -302,7 +302,11 @@ ModuleDefPtr Construct::loadModule(Construct::StringVecIter moduleNameBegin,
     // look for a shared library
     ModulePath modPath = searchPath(sourceLibPath, moduleNameBegin,
                                     moduleNameEnd,
+#ifdef __APPLE__
+                                    ".dylib",
+#else
                                     ".so",
+#endif
                                     rootBuilder->options->verbosity
                                     );
     

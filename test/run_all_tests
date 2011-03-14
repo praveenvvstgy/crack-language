@@ -10,6 +10,15 @@ parseWarn="$source:"
 builder="llvm-jit"
 runBinary=0
 
+os=`uname -s`
+if [ "$os" = "Darwin" ];
+then
+  soext=".dylib"
+else
+  soext=".so"
+fi
+echo "OS: $os, shared lib ext: $soext"
+
 if [ "$1" = "crackc" ];
 then
   builder="llvm-native"
@@ -59,11 +68,11 @@ function test_output {
 
 # get a fresh copy of the runtime library and the PCRE library
 mkdir -p lib/crack/ext
-ln -f .libs/runtime.so lib/crack
-if [ -e .libs/_pcre.so ]; then
-    ln -f .libs/_pcre.so lib/crack/ext
+ln -f ".libs/runtime${soext}" lib/crack
+if [ -e ".libs/_pcre${soext}" ]; then
+    ln -f ".libs/_pcre${soext}" lib/crack/ext
 fi
-ln -f test/.libs/testext.so lib
+ln -f "test/.libs/testext${soext}" lib
 
 # find the root of the source tree (should be my parent directory)
 root=$(cd $(dirname "$0")/..; pwd)
@@ -1146,7 +1155,7 @@ test_output 'objects' 'import test.test_object;' ok
 test_output 'mix-ins' 'import test.test_mixins;' ok
 test_output 'string tests' 'import test.test_strings;' ok
 test_output 'error tests' 'import test.test_error;' ok
-if [ -e .libs/_pcre.so ]; then
+if [ -e ".libs/_pcre$soext" ]; then
     test_output 'regex tests' 'import test.test_regex;' ok
 else
     echo 'Omitting regex tests (PCRE not installed)'
