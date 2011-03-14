@@ -1,0 +1,39 @@
+#!/bin/sh
+# Copyright 2003 Michael A. Muller
+
+# --- embedded python ---
+# generate Makefile.am from Makefile.am.in
+python <<__eof__
+import re
+
+varRx = re.compile(r'(.*)%(\w+)%(.*)', re.DOTALL)
+
+# get the source files
+sourceModules = open('sourceModules.txt').read().strip().split('\n')
+runtimeModules = open('runtimeModules.txt').read().strip().split('\n')
+
+vars = {
+    'libCrackSources': sourceModules, 
+    'libRuntimeSources': runtimeModules
+}
+
+def expand(dst, m):
+    sources = vars[m.group(2)]
+    dst.write(m.group(1) + ' \\\\\n    '.join(sources) + m.group(3))
+
+src = open('Makefile.am.in')
+dst = open('Makefile.am', 'w')
+for line in src:
+    m = varRx.match(line)
+    if m:
+        expand(dst, m)
+    else:
+        dst.write(line)
+__eof__
+# --- end of embedded python ---
+if `which libtoolize`; then lt=libtoolize; elif `which glibtoolize`; then lt=glibtoolize; else echo "no libtoolize"; exit 1; fi
+if [ ! -e ltmain.sh ]; then $lt; fi
+aclocal -I m4 --install
+autoconf
+autoheader
+automake --add-missing
