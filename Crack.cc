@@ -3,6 +3,7 @@
 #include "Crack.h"
 
 #include <libgen.h> // basename
+#include <stdlib.h>
 #include <string.h>
 
 #include "builder/Builder.h"
