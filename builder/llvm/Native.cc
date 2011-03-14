@@ -39,8 +39,6 @@ using namespace llvm;
 using namespace builder;
 using namespace std;
 
-extern char **environ;
-
 namespace builder { namespace mvll {
 
 static void PrintCommand(const std::vector<const char*> &args) {
@@ -502,14 +500,13 @@ void nativeCompile(llvm::Module *module,
     }
 
     string ErrMsg;
-    char **envp = ::environ;
 
     GenerateNative(binFile.str(),
                    oFile.str(),
                    LibPaths,
                    NativeLinkItems,
                    gcc,
-                   envp,
+                   NULL /*envp*/,
                    ErrMsg,
                    is64Bit,
                    o->verbosity

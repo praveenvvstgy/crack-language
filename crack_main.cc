@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <getopt.h>
+#include <libgen.h> // basename
 #include "parser/ParseError.h"
 #include "parser/Parser.h"
 #include "parser/Toker.h"
@@ -13,7 +14,6 @@
 #include "builder/llvm/LLVMJitBuilder.h"
 #include "builder/llvm/LLVMLinkerBuilder.h"
 #include "Crack.h"
-
 using namespace std;
 
 typedef enum {

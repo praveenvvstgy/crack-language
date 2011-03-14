@@ -2,6 +2,7 @@
 
 #include "Crack.h"
 
+#include <libgen.h> // basename
 #include <string.h>
 
 #include "builder/Builder.h"
@@ -91,8 +92,13 @@ int Crack::runScript(std::istream &src, const std::string &name) {
     if (!init())
         return 1;
     options->optionMap["mainUnit"] = name;
-    if (options->optionMap.find("out") == options->optionMap.end())
-        options->optionMap["out"] = basename(name.c_str());
+    if (options->optionMap.find("out") == options->optionMap.end()) {
+        char *bname = strdup(name.c_str());
+        if (bname) {
+            options->optionMap["out"] = basename(bname);
+            free(bname);
+        }
+    }
     construct->runScript(src, name);
 }
 
