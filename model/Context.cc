@@ -174,8 +174,8 @@ ContextPtr Context::getToplevel() {
 bool Context::encloses(const Context &other) const {
     if (this == &other)
         return true;
-    else if (parent)
-        return encloses(*parent);
+    else if (other.parent)
+        return encloses(*other.parent);
     else
         return false;
 }
@@ -448,7 +448,7 @@ ContextPtr Context::getCatch() {
     if (catchBranch)
         return this;
     else if (toplevel)
-        return parent;
+        return this;
     else if (parent)
         return parent->getCatch();
 }
@@ -592,7 +592,8 @@ VarDefPtr Context::lookUp(const std::string &varName, Namespace *srcNs) {
 
 FuncDefPtr Context::lookUp(const std::string &varName,
                            vector<ExprPtr> &args,
-                           Namespace *srcNs
+                           Namespace *srcNs,
+                           bool allowOverrides
                            ) {
     if (!srcNs)
         srcNs = ns.get();
@@ -621,7 +622,7 @@ FuncDefPtr Context::lookUp(const std::string &varName,
         return 0;
     
     // look up the signature in the overload
-    return overload->getMatch(*this, args);
+    return overload->getMatch(*this, args, allowOverrides);
 }
 
 FuncDefPtr Context::lookUpNoArgs(const std::string &name, bool acceptAlias,

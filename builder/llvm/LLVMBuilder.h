@@ -25,6 +25,7 @@ SPUG_RCPTR(BHeapVarDefImpl);
 SPUG_RCPTR(BTypeDef);
 class DebugInfo;
 class FuncBuilder;
+class BModuleDef;
 SPUG_RCPTR(LLVMBuilder);
 
 class LLVMBuilder : public Builder {
@@ -57,6 +58,13 @@ class LLVMBuilder : public Builder {
 
         LLVMBuilderPtr rootBuilder;
 
+        /**
+         * Creates a new LLVM module and initializes all of the exception 
+         * handling declarations that need to be present.  Assigns the 
+         * 'module' instance variable to the new module.
+         */
+        void createLLVMModule(const std::string &name);
+
         void initializeMethodInfo(model::Context &context, 
                                   model::FuncDef::Flags flags,
                                   model::FuncDef *existing,
@@ -80,13 +88,20 @@ class LLVMBuilder : public Builder {
          * possibly bind the module to an execution engine
          * called in base llvmbuilder only from registerPrimFuncs
          */
-        virtual void engineBindModule(model::ModuleDef *moduleDef) { }
+        virtual void engineBindModule(BModuleDef *moduleDef) { }
 
         /**
          * let the engine "finish" a module before running/linking/dumping
          * called in base llvmbuilder only from registerPrimFuncs
          */
-        virtual void engineFinishModule(model::ModuleDef *moduleDef) { }
+        virtual void engineFinishModule(BModuleDef *moduleDef) { }
+
+        /**
+         * common module initialization that happens in all builders
+         * during createModule. includes some functions that need to be
+         * defined in each module.
+         */
+        void createModuleCommon(model::Context &context);
 
         /**
          * Gets the first unwind block for the context, emitting the whole 
@@ -101,18 +116,37 @@ class LLVMBuilder : public Builder {
          */
         void clearCachedCleanups(model::Context &context);
 
+        /** Creates special hidden variables used by the generated code. */
+        void createSpecialVar(model::Namespace *ns, model::TypeDef *type, 
+                              const std::string &name
+                              );
+
+        /** Creates the "start blocks" for the current function. */
+        void createFuncStartBlocks(const std::string &name);
+
+        /** 
+         * Insures that the class body global is present in the current module.
+         */
+        virtual void fixClassInstRep(BTypeDef *type) = 0;
+        
     public:
         // currently experimenting with making these public to give objects in 
         // LLVMBuilder.cc's anonymous internal namespace access to them.  It 
         // seems to be cutting down on the amount of code necessary to do this.
         llvm::Module *module;
         llvm::Function *func;
-        llvm::Type *llvmVoidPtrType;
+        const llvm::Type *llvmVoidPtrType;
         llvm::IRBuilder<> builder;
         llvm::Value *lastValue;
         llvm::BasicBlock *funcBlock;
+        llvm::Function *exceptionPersonalityFunc;
         static int argc;
         static char **argv;
+
+        /** 
+         * Returns true if cleanups should be suppressed (i.e. after a throw) 
+         */
+        bool suppressCleanups();
 
         void narrow(model::TypeDef *curType, model::TypeDef *ancestor);
 
@@ -229,13 +263,15 @@ class LLVMBuilder : public Builder {
 
         virtual model::BranchpointPtr emitBeginTry(model::Context &context);
         
-        virtual void emitCatch(model::Context &context,
-                               model::Branchpoint *branchpoint,
-                               model::TypeDef *catchType
-                               );
+        virtual model::ExprPtr emitCatch(model::Context &context,
+                                         model::Branchpoint *branchpoint,
+                                         model::TypeDef *catchType,
+                                         bool terminal
+                                         );
         
         virtual void emitEndTry(model::Context &context,
-                                model::Branchpoint *branchpoint
+                                model::Branchpoint *branchpoint,
+                                bool terminal
                                 );
 
         virtual void emitThrow(model::Context &context,
@@ -368,4 +404,3 @@ class LLVMBuilder : public Builder {
 } // namespace builder::mvll
 } // namespace builder
 #endif
-

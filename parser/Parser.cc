@@ -514,8 +514,14 @@ FuncCallPtr Parser::parseFuncCall(const Token &ident, const string &funcName,
    // look up the variable
    
    // lookup the method from the variable context's type context
+   // if the container is a class, assume that this is a lookup in a specific 
+   // base class and allow looking up overrides for it (this won't work if we 
+   // ever give class objects a vtable because it will break meta-class 
+   // methods, but we need to replace the specific lookup syntax anyway)
    // XXX needs to handle callable objects.
-   FuncDefPtr func = context->lookUp(funcName, args, ns);
+   FuncDefPtr func = context->lookUp(funcName, args, ns, 
+                                     container && container->type->meta
+                                     );
    if (!func)
       error(ident, SPUG_FSTR("No method exists matching " << funcName << 
                               "(" << args << ")"));
@@ -2082,13 +2088,17 @@ ContextPtr Parser::parseTryStmt() {
       unexpected(tok, "Curly bracket expected after try.");
    
    BranchpointPtr pos = context->builder.emitBeginTry(*context);
-   
+
+   // create a subcontext for the try statement
+   ContextStackFrame cstack(*this, context->createSubContext().get());
    context->setCatchBranchpoint(pos.get());
+
+   ContextPtr terminal;
    {
       ContextStackFrame cstack(*this, context->createSubContext().get());
-      parseBlock(true, noCallbacks); // XXX add tryLeave callback
+      terminal = parseBlock(true, noCallbacks); // XXX add tryLeave callback
    }
-   context->setCatchBranchpoint(0);
+   bool lastWasTerminal = terminal;
    
    tok = toker.getToken();
    if (!tok.isCatch())
@@ -2107,11 +2117,14 @@ ContextPtr Parser::parseTryStmt() {
       TypeDefPtr exceptionType = parseTypeSpec();
       
       // parse the exception variable
-      tok = toker.getToken();
-      if (!tok.isIdent())
+      Token varTok = toker.getToken();
+      if (!varTok.isIdent())
          unexpected(tok, "variable name expected after exception type.");
 
-      context->builder.emitCatch(*context, pos.get(), exceptionType.get());
+      ExprPtr exceptionObj =
+         context->builder.emitCatch(*context, pos.get(), exceptionType.get(),
+                                    lastWasTerminal
+                                    );
       
       tok = toker.getToken();
       if (!tok.isRParen())
@@ -2128,15 +2141,31 @@ ContextPtr Parser::parseTryStmt() {
       
       {
          ContextStackFrame cstack(*this, context->createSubContext().get());
-         parseBlock(true, noCallbacks); // XXX add catchLeave callback
+         
+         // create a variable definition for the exception variable
+         context->emitVarDef(exceptionType.get(), varTok, exceptionObj.get());
+         
+         // XXX add catchLeave callback
+         ContextPtr terminalCatch = parseBlock(true, noCallbacks); 
+         lastWasTerminal = terminalCatch;
+         if (terminalCatch) {
+            if (terminal && terminal->encloses(*terminalCatch))
+               // need to replace the terminal context to the closer terminal 
+               // context for the catch
+               terminal = terminalCatch;
+         } else {
+            // non-terminal catch, therefore the entire try/catch statement 
+            // is not terminal.
+            terminal = 0;
+         }
       }
       
       // see if there's another catch
       tok = toker.getToken();
       if (!tok.isCatch()) {
          toker.putBack(tok);
-         context->builder.emitEndTry(*context, pos.get());
-         return 0;
+         context->builder.emitEndTry(*context, pos.get(), lastWasTerminal);
+         return terminal;
       }
    }
 }
@@ -2157,7 +2186,12 @@ ContextPtr Parser::parseThrowStmt() {
       context->builder.emitThrow(*context, expr.get());
    }
 
-   return context->getCatch();
+   // get the terminal context - if it's a toplevel context, we actually want 
+   // to go one step further up.
+   ContextPtr terminal = context->getCatch();
+   if (terminal->toplevel)
+      terminal = terminal->parent;
+   return terminal;
 }
 
 // oper name ( args ) { ... }

@@ -3,6 +3,9 @@
 #include "BFuncDef.h"
 #include "BTypeDef.h"
 
+#include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/GlobalVariable.h>
+#include <llvm/Module.h>
 #include "model/Context.h"
 #include "model/OverloadDef.h"
 #include "PlaceholderInstruction.h"
@@ -10,6 +13,7 @@
 using namespace model;
 using namespace std;
 using namespace builder::mvll;
+using namespace llvm;
 
 // add all of my virtual functions to 'vtb'
 void BTypeDef::extendVTables(VTableBuilder &vtb) {
@@ -136,4 +140,33 @@ BTypeDef *BTypeDef::findFirstVTable(BTypeDef *vtableBaseType) {
 
     cerr << "class is " << name << endl;
     assert(false && "Failed to find first vtable");
+}
+
+GlobalVariable *BTypeDef::getClassInstRep(Module *module,
+                                          ExecutionEngine *execEng
+                                          ) {
+    if (classInst->getParent() == module) {
+        return classInst;
+    } else {
+        GlobalVariable *gvar = 
+            cast<GlobalVariable>(
+                module->getGlobalVariable(classInst->getName())
+            );
+        if (!gvar) {
+            gvar = new GlobalVariable(*module, classInst->getType(), 
+                                      true, // is constant
+                                      GlobalValue::ExternalLinkage,
+                                      0, // initializer: null for externs
+                                      classInst->getName()
+                                      );
+
+            // if there's an execution engine, do the pointer hookup
+            if (execEng) {
+                void *p = execEng->getPointerToGlobal(classInst);
+                execEng->addGlobalMapping(gvar, p);
+            }
+        }
+        
+        return gvar;
+    }
 }

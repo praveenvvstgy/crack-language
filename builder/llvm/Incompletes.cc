@@ -1,12 +1,17 @@
 // Copyright 2010 Google Inc, Shannon Weyrick <weyrick@mozek.us>
 
 #include "Incompletes.h"
+
+#include <llvm/LLVMContext.h>
 #include "BTypeDef.h"
 #include "BFuncDef.h"
 #include "LLVMBuilder.h"
 #include "Utils.h"
 
 #include <map>
+
+#include "llvm/GlobalValue.h"  // XXX for getting a module
+#include "llvm/Module.h"  // XXX for getting a module
 
 using namespace llvm;
 using namespace model;
@@ -126,6 +131,65 @@ void IncompleteInstVarAssign::insertInstructions(IRBuilder<> &builder) {
     Value *fieldPtr = builder.CreateStructGEP(Op<0>(), index);
     builder.CreateStore(Op<1>(), fieldPtr);
 }
+
+// IncompleteCatchSelector
+void *IncompleteCatchSelector::operator new(size_t s) {
+    return User::operator new(s, 0);
+}
+
+IncompleteCatchSelector::IncompleteCatchSelector(Value *ehSelector,
+                                                 Value *exception, 
+                                                 Value *personalityFunc,
+                                                 BasicBlock *parent
+                                                 ) :
+    PlaceholderInstruction(
+        Type::getInt32Ty(getGlobalContext()),
+        parent,
+        OperandTraits<IncompleteCatchSelector>::op_begin(this),
+        OperandTraits<IncompleteCatchSelector>::operands(this)
+    ),
+    ehSelector(ehSelector),
+    exception(exception),
+    personalityFunc(personalityFunc),
+    typeImpls(0) {
+}
+
+IncompleteCatchSelector::IncompleteCatchSelector(Value *ehSelector,
+                                                 Value *exception,
+                                                 Value *personalityFunc,
+                                                 Instruction *insertBefore
+                                                 ) :
+    PlaceholderInstruction(
+        Type::getInt32Ty(getGlobalContext()),
+        insertBefore,
+        OperandTraits<IncompleteCatchSelector>::op_begin(this),
+        OperandTraits<IncompleteCatchSelector>::operands(this)
+    ),
+    ehSelector(ehSelector),
+    exception(exception),
+    personalityFunc(personalityFunc),
+    typeImpls(0) {
+}
+
+IncompleteCatchSelector::~IncompleteCatchSelector() {
+}
+
+Instruction *IncompleteCatchSelector::clone_impl() const {
+    return new IncompleteCatchSelector(ehSelector, exception, personalityFunc);
+}
+
+void IncompleteCatchSelector::insertInstructions(IRBuilder<> &builder) {
+    vector<Value *> args(3 + typeImpls->size());
+    args[0] = exception;
+    args[1] = personalityFunc;
+    int i;
+    for (i = 0; i < typeImpls->size(); ++i)
+        args[i + 2] = (*typeImpls)[i];
+    args[i + 2] = Constant::getNullValue(builder.getInt8Ty()->getPointerTo());
+    replaceAllUsesWith(
+        builder.CreateCall(ehSelector, args.begin(), args.end())
+    );
+}    
 
 // IncompleteNarrower
 void * IncompleteNarrower::operator new(size_t s) {
@@ -658,4 +722,3 @@ Value *IncompleteSpecialize::emitSpecialize(
     }
 
 }
-
