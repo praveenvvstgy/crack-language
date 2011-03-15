@@ -14,6 +14,7 @@
 #include "Consts.h"
 #include "FuncBuilder.h"
 #include "Incompletes.h"
+#include "LLVMValueExpr.h"
 #include "Ops.h"
 #include "PlaceholderInstruction.h"
 #include "Utils.h"
@@ -33,6 +34,7 @@
 #include <llvm/PassManager.h>
 #include <llvm/CallingConv.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Intrinsics.h>
 
 #include <spug/Exception.h>
 #include <spug/StringFmt.h>
@@ -320,6 +322,27 @@ void LLVMBuilder::emitFunctionCleanups(Context &context) {
         emitFunctionCleanups(*context.parent);
 }
 
+void LLVMBuilder::createLLVMModule(const string &name) {
+    LLVMContext &lctx = getGlobalContext();
+    module = new llvm::Module(name, lctx);
+    getDeclaration(module, Intrinsic::eh_selector);
+    getDeclaration(module, Intrinsic::eh_exception);
+    
+    // our exception personality function
+    vector<const Type *> args(5);;
+    args[0] = Type::getInt32Ty(lctx);
+    args[1] = args[0];
+    args[2] = Type::getInt64Ty(lctx);
+    args[3] = Type::getInt8Ty(lctx)->getPointerTo();
+    args[4] = args[3];
+    FunctionType *epType = FunctionType::get(Type::getVoidTy(lctx), args, 
+                                             false
+                                             );
+                                            
+    Constant *ep =
+        module->getOrInsertFunction("__CrackExceptionPersonality", epType);
+    exceptionPersonalityFunc = cast<Function>(ep);    
+}
 
 void LLVMBuilder::initializeMethodInfo(Context &context, FuncDef::Flags flags,
                                        FuncDef *existing,
@@ -354,36 +377,34 @@ BasicBlock *LLVMBuilder::getUnwindBlock(Context &context) {
         BBranchpointPtr::rcast(outerContext->getCatchBranchpoint());
 
     BasicBlock *final;
+    BBuilderContextData::CatchDataPtr cdata;
     if (bpos) {
         final = bpos->block;
+
+        // get the "catch data" for the context so we can correctly store 
+        // placeholders instructions for the selector calls.
+        BBuilderContextData *outerBData = 
+            BBuilderContextData::get(outerContext.get());;
+        cdata = outerBData->getCatchData();    
     } else {
         // no catch clause.  Find or create the unwind clause for the function 
         // to continue the unwind.
         ContextPtr funcCtx = context.getToplevel();
         BBuilderContextData *bdata = 
             BBuilderContextDataPtr::arcast(funcCtx->builderData);
-        if (!bdata->unwindBlock) {
-            bdata->unwindBlock = BasicBlock::Create(getGlobalContext(),
-                                                    "unwind",
-                                                    func
-                                                    );
-            IRBuilder<> b(bdata->unwindBlock);
-            b.CreateUnwind();
-        }
-        
-        // assertion to make sure this is the right unwind block
-        if (bdata->unwindBlock->getParent() != func) {
-            string bdataFunc = bdata->unwindBlock->getParent()->getName();
-            string curFunc = func->getName();
-            cerr << "bad function for unwind block, got " <<
-                bdataFunc << " expected " << curFunc << endl;
-            assert(false);
-        }
+        BasicBlock *unwindBlock = bdata->getUnwindBlock(func);
 
-        final = bdata->unwindBlock;
+        final = unwindBlock;
+        
+        // move the outer context back one level so we get cleanups for the 
+        // function scope.
+        outerContext = outerContext->getParent();
     }
-    
-    return emitUnwindCleanups(context, *outerContext, final);
+
+    BasicBlock *cleanups = emitUnwindCleanups(context, *outerContext, final);
+    BCleanupFrame *firstCleanupFrame = 
+        BCleanupFramePtr::rcast(context.cleanupFrame);
+    return firstCleanupFrame->getLandingPad(cleanups, cdata.get());
 }
 
 void LLVMBuilder::clearCachedCleanups(Context &context) {
@@ -930,27 +951,177 @@ void LLVMBuilder::emitContinue(Context &context, Branchpoint *branch) {
     builder.CreateBr(bpos->block2);
 }
 
+void LLVMBuilder::createSpecialVar(Namespace *ns, TypeDef *type, 
+                                   const string &name
+                                   ) {
+    Value *ptr;
+    BTypeDef *tp = BTypeDefPtr::cast(type);
+    VarDefPtr varDef = new VarDef(tp, name);
+    varDef->impl = createLocalVar(tp, ptr);
+    ptr->setName(name);
+    ns->addDef(varDef.get());
+}
+
+void LLVMBuilder::createFuncStartBlocks(const std::string &name) {
+    // create the "function block" (the first block in the function, will be 
+    // used to hold all local variable allocations)
+    funcBlock = BasicBlock::Create(getGlobalContext(), name, func);
+    builder.SetInsertPoint(funcBlock);
+    
+    // since the function block can get appended to arbitrarily, create a 
+    // first block where it is safe for us to emit terminating instructions
+    BasicBlock *firstBlock = BasicBlock::Create(getGlobalContext(), "l",
+                                                func
+                                                );
+    builder.CreateBr(firstBlock);
+    builder.SetInsertPoint(firstBlock);
+}
+
+bool LLVMBuilder::suppressCleanups() {
+    // only ever want to do this if the last instruction is unreachable.
+    BasicBlock *block = builder.GetInsertBlock();
+    BasicBlock::iterator i = block->end();
+    return i != block->begin() &&
+           (--i)->getOpcode() == Instruction::Unreachable;
+}
+        
+
 BranchpointPtr LLVMBuilder::emitBeginTry(model::Context &context) {
-    BasicBlock *catchBlock = BasicBlock::Create(getGlobalContext(), "catch");
-    BBranchpointPtr bpos = new BBranchpoint(catchBlock);
+    // make sure we have the special exception variables installed in the 
+    // context.
+    if (!context.ns->lookUp(":exceptionSelector")) {
+        createSpecialVar(context.ns.get(), context.construct->int32Type.get(), 
+                         ":exceptionSelector"
+                         );
+        createSpecialVar(context.ns.get(), context.construct->voidptrType.get(), 
+                         ":exceptionObject"
+                         );
+    }
+
+    BasicBlock *catchSwitch = BasicBlock::Create(getGlobalContext(), 
+                                                 "catch_switch",
+                                                 func
+                                                 );
+    BBranchpointPtr bpos = new BBranchpoint(catchSwitch);
     return bpos;
 }
 
-void LLVMBuilder::emitCatch(Context &context,
-                            Branchpoint *branchpoint,
-                            TypeDef *catchType
-                            ) {
+ExprPtr LLVMBuilder::emitCatch(Context &context,
+                               Branchpoint *branchpoint,
+                               TypeDef *catchType,
+                               bool terminal
+                               ) {
+    BBranchpoint *bpos = BBranchpointPtr::cast(branchpoint);
+
+    // get the catch data
+    BBuilderContextData *bdata =
+        BBuilderContextData::get(&context);
+    BBuilderContextData::CatchDataPtr cdata = bdata->getCatchData();
+
+    // if this is the first catch block (as indicated by the lack of a 
+    // "post-try" block in block2), create the post-try and create a branch to 
+    // it in the current block.
+    if (!bpos->block2) {
+        bpos->block2 = BasicBlock::Create(getGlobalContext(), "after_try",
+                                          func
+                                          );
+        if (!terminal)
+            builder.CreateBr(bpos->block2);
+        
+        // generate a switch instruction based on the value of 
+        // :exceptionSelector, we'll fill it in with values later.
+        builder.SetInsertPoint(bpos->block);
+        VarDefPtr sel = context.ns->lookUp(":exceptionSelector");
+        BHeapVarDefImplPtr selImpl = BHeapVarDefImplPtr::rcast(sel->impl);
+        Value *selVal = builder.CreateLoad(selImpl->rep);
+        cdata->switchInst =
+            builder.CreateSwitch(selVal, bdata->getUnwindBlock(func), 3);
+
+    // if the last catch block was not terminal, branch to after_try
+    } else if (!terminal) {
+        builder.CreateBr(bpos->block2);
+    }
+
+    // create a catch block and make it the new insert point.
+    BasicBlock *catchBlock = BasicBlock::Create(getGlobalContext(), "catch",
+                                                func
+                                                );
+    builder.SetInsertPoint(catchBlock);
+    
+    // store the type and the catch block for later fixup
+    BTypeDef *btype = BTypeDefPtr::cast(catchType);
+    fixClassInstRep(btype);
+    cdata->catches.push_back(
+        BBuilderContextData::CatchBranch(btype, catchBlock)
+    );
+    
+    // record it if the last block was non-terminal
+    if (!terminal)
+        cdata->nonTerminal = true;
+    
+    // emit an expression to get the exception object
+    VarDefPtr exObj = context.ns->lookUp(":exceptionObject");
+    BHeapVarDefImplPtr exObjImpl = BHeapVarDefImplPtr::rcast(exObj->impl);
+    Value *exObjVal = builder.CreateLoad(exObjImpl->rep);
+    Function *getExFunc = module->getFunction("__CrackGetException");
+    vector<Value *> parms(1);
+    parms[0] = exObjVal;
+    lastValue = builder.CreateCall(getExFunc, parms.begin(), parms.end());
+    lastValue = builder.CreateBitCast(lastValue, btype->rep);
+    return new LLVMValueExpr(catchType, lastValue);
 }
 
 void LLVMBuilder::emitEndTry(model::Context &context,
-                             Branchpoint *branchpoint
+                             Branchpoint *branchpoint,
+                             bool terminal
                              ) {
+    // get the catch-data
+    BBuilderContextData *bdata = BBuilderContextData::get(&context);
+    BBuilderContextData::CatchDataPtr cdata = bdata->getCatchData();
+
+    BasicBlock *nextBlock = BBranchpointPtr::cast(branchpoint)->block2;
+    if (!terminal) {
+        builder.CreateBr(nextBlock);
+        cdata->nonTerminal = true;
+    }
+
+    if (!cdata->nonTerminal) {
+        // all blocks are terminal - delete the after_try block
+        nextBlock->eraseFromParent();
+    } else {
+        // emit subsequent code into the new block
+        builder.SetInsertPoint(nextBlock);
+    }
+
+    // if this is a nested try/catch block, add it to the catch data for its 
+    // parent.
+    ContextPtr outer = context.getParent()->getCatch();
+    if (!outer->toplevel) {
+        // this isn't a toplevel, therefore it is a try/catch statement
+        BBuilderContextData::CatchDataPtr enclosingCData =
+            BBuilderContextData::get(outer.get())->getCatchData();
+        enclosingCData->nested.push_back(cdata);
+        
+    } else {
+        cdata->fixAllSelectors(module);
+    }
 }
 
-void LLVMBuilder::emitThrow(Context &context,
-                            Expr *expr
-                            ) {
-    builder.CreateUnwind();
+void LLVMBuilder::emitThrow(Context &context, Expr *expr) {
+    Function *throwFunc = module->getFunction("__CrackThrow");
+    context.createCleanupFrame();
+    expr->emit(context);
+    narrow(expr->type.get(), context.construct->vtableBaseType.get());
+    BasicBlock *unwindBlock = getUnwindBlock(context),
+               *unreachableBlock = BasicBlock::Create(getGlobalContext(),
+                                                      "unreachable",
+                                                      func
+                                                      );
+    builder.CreateInvoke(throwFunc, unreachableBlock, unwindBlock, lastValue);
+    builder.SetInsertPoint(unreachableBlock);
+    builder.CreateUnreachable();
+    // XXX think I actually want to discard the cleanup frame
+    context.closeCleanupFrame();
 }
 
 FuncDefPtr LLVMBuilder::createFuncForward(Context &context,
@@ -1078,18 +1249,7 @@ FuncDefPtr LLVMBuilder::emitBeginFunc(Context &context,
 
     func = funcDef->rep;
     
-    // create the "function block" (the first block in the function, will be 
-    // used to hold all local variable allocations)
-    funcBlock = BasicBlock::Create(getGlobalContext(), name, func);
-    builder.SetInsertPoint(funcBlock);
-    
-    // since the function block can get appended to arbitrarily, create a 
-    // first block where it is safe for us to emit terminating instructions
-    BasicBlock *firstBlock = BasicBlock::Create(getGlobalContext(), "l",
-                                                func
-                                                );
-    builder.CreateBr(firstBlock);
-    builder.SetInsertPoint(firstBlock);
+    createFuncStartBlocks(name);
     
     if (flags & FuncDef::virtualized) {
         // emit code to convert from the first declaration base class 
@@ -1131,6 +1291,7 @@ void LLVMBuilder::emitEndFunc(model::Context &context,
     BBuilderContextData *contextData =
         BBuilderContextDataPtr::rcast(context.builderData);
     func = contextData->func;
+    funcBlock = func ? &func->front() : 0;
     builder.SetInsertPoint(contextData->block);
 }
 
@@ -1637,12 +1798,11 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     assert(!context.getParent()->getParent() && "parent context must be root");
     assert(!module);
 
-    BModuleDef *bMod = new BModuleDef(".builtin", context.ns.get());
+    createLLVMModule(".builtin");
+    BModuleDef *bMod = new BModuleDef(".builtin", context.ns.get(), module);
 
     Construct *gd = context.construct;
     LLVMContext &lctx = getGlobalContext();
-
-    module = new llvm::Module(".builtin", lctx);
 
     // create the basic types
     
@@ -1665,7 +1825,7 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     context.addDef(voidType);
 
     BTypeDef *voidptrType;
-    llvmVoidPtrType = 
+    llvmVoidPtrType = Type::getInt8Ty(lctx)->getPointerTo();
         PointerType::getUnqual(OpaqueType::get(getGlobalContext()));
     gd->voidptrType = voidptrType = new BTypeDef(context.construct->classType.get(), 
                                                  "voidptr",
@@ -1673,6 +1833,9 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                                  );
     voidptrType->defaultInitializer = new NullConst(voidptrType);
     context.addDef(voidptrType);
+
+    // now that we've got a voidptr type, give the class object a cast to it.
+    context.addDef(new VoidPtrOpDef(voidptrType), classType);
     
     llvm::Type *llvmBytePtrType = 
         PointerType::getUnqual(Type::getInt8Ty(lctx));
@@ -1959,6 +2122,9 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
     addExplicitFPTruncate<FPToSIOpCall>(context, float64Type, int64Type);
     addExplicitFPTruncate<FPToUIOpCall>(context, float64Type, uint64Type);
 
+    context.addDef(new UIToFPOpDef(float32Type, "oper to float32"), uint32Type);
+    context.addDef(new SIToFPOpDef(float32Type, "oper to float32"), int32Type);
+
     // create the array generic
     TypeDefPtr arrayType = new ArrayTypeDef(context.construct->classType.get(),
                                             "array", 
@@ -2039,6 +2205,97 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
 
 }
 
+void LLVMBuilder::createModuleCommon(Context &context) {
+
+    // name some structs in this module
+    BTypeDef *classType = BTypeDefPtr::arcast(context.construct->classType);
+    module->addTypeName(".struct.Class", classType->rep);
+    BTypeDef *vtableBaseType = BTypeDefPtr::arcast(
+                                  context.construct->vtableBaseType);
+    module->addTypeName(".struct.vtableBase", vtableBaseType->rep);
+
+    // all of the "extern" primitive functions have to be created in each of
+    // the modules - we can not directly reference across modules.
+
+    //BTypeDef *int32Type = BTypeDefPtr::arcast(context.construct->int32Type);
+    //BTypeDef *int64Type = BTypeDefPtr::arcast(context.construct->int64Type);
+    //BTypeDef *uint64Type = BTypeDefPtr::arcast(context.construct->uint64Type);
+    BTypeDef *intType = BTypeDefPtr::arcast(context.construct->intType);
+    BTypeDef *voidType = BTypeDefPtr::arcast(context.construct->int32Type);
+    //BTypeDef *float32Type = BTypeDefPtr::arcast(context.construct->float32Type);
+    //BTypeDef *byteptrType =
+    //    BTypeDefPtr::arcast(context.construct->byteptrType);
+    BTypeDef *voidptrType =
+        BTypeDefPtr::arcast(context.construct->voidptrType);
+
+    // create "void *calloc(uint size)"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidptrType, "calloc", 2);
+        f.addArg("size", intType);
+        f.addArg("size", intType);
+        f.setSymbolName("calloc");
+        f.finish();
+        callocFunc = f.funcDef->getRep(*this);
+    }
+
+    // create "array[byteptr] __getArgv()"
+    {
+        TypeDefPtr array = context.ns->lookUp("array");
+        assert(array.get() && "array not defined in context");
+        TypeDef::TypeVecObjPtr types = new TypeDef::TypeVecObj();
+        types->push_back(context.construct->byteptrType.get());
+        TypeDefPtr arrayOfByteptr =
+            array->getSpecialization(context, types.get());
+        FuncBuilder f(context, FuncDef::noFlags,
+                      BTypeDefPtr::arcast(arrayOfByteptr),
+                      "__getArgv",
+                      0
+                      );
+        f.setSymbolName("__getArgv");
+        f.finish();
+    }
+
+    // create "int __getArgc()"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, intType, "__getArgc", 0);
+        f.setSymbolName("__getArgc");
+        f.finish();
+    }
+
+    // create "__CrackThrow(VTableBase)"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidType, "__CrackThrow", 1);
+        f.addArg("exception", vtableBaseType);
+        f.setSymbolName("__CrackThrow");
+        f.finish();
+    }
+
+    // create "__CrackGetException(voidptr)"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidptrType,
+                      "__CrackGetException",
+                      1
+                      );
+        f.addArg("exceptionObject", voidptrType);
+        f.setSymbolName("__CrackGetException");
+        f.finish();
+    }
+
+    // create "__CrackBadCast(Class a, Class b)"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidType,
+                      "__CrackBadCast",
+                      2
+                      );
+        f.addArg("curType", classType);
+        f.addArg("newType", classType);
+        f.setSymbolName("__CrackBadCast");
+        f.finish();
+    }        
+
+}
+
+
 void *LLVMBuilder::loadSharedLibrary(const std::string &name) {
     // leak the handle so the library stays mapped for the life of the process.
     void *handle = dlopen(name.c_str(), RTLD_LAZY|RTLD_GLOBAL);
@@ -2098,3 +2355,4 @@ void LLVMBuilder::emitVTableInit(Context &context, TypeDef *typeDef) {
     // store it
     btype->addPlaceholder(vtableInit);
 }
+

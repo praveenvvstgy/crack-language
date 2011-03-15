@@ -39,7 +39,9 @@ function test_output {
        [ "${expected:0:10}" != "ParseError" ]; then
         cmdline="./$binName $args"
         #echo "running $cmdline"
-        result="$(echo $stdin | $cmdline 2>&1)"
+        export LD_LIBRARY_PATH=".libs:test/.libs:$LD_LIBRARY_PATH"
+        result="$result$(echo $stdin | $cmdline 2>&1)"
+        rm -f "./$binName"
     fi
     if [ "$result" = "$expected" ]; then
         echo ok
@@ -68,7 +70,7 @@ root=$(cd $(dirname "$0")/..; pwd)
 echo "dirname = $0, root = $root"
 
 # start with no bootstrapping
-opts="-Gnl $root -l $root/lib -l lib"
+opts="-Gnl $root -l $root/lib:lib:.libs"
 
 test_output "hello world" 'puts("hello world")' 'hello world'
 test_output "semicolon terminated" 'puts("hello world");' 'hello world'
@@ -254,6 +256,19 @@ test_output 'method overloads' \
                void f(byteptr v) { puts(v); } };
      A a = {}; a.f(100); a.f("test");' \
     100test
+
+test_output 'overrides ignored in overload search' \
+    'class A {} class B : A {}
+     class X : VTableBase {
+        void f(B v) { puts("ok"); }
+        void f(A v) { puts("FAILED virtual functions altogether!!"); }
+     }
+     class Y : X {
+        void f(A v) { puts("FAILED called override"); }
+     }
+     Y y = {};
+     y.f(B());' \
+     ok
 
 # see to_test.crk: this only works when we define f(bool) before f(int32)
 test_output 'function overloads' \
@@ -818,8 +833,10 @@ test_output 'warning on unnecessary forward declarations' \
     "${parseWarn}2: Unnecessary forward declaration for overriden function \
 foo (defined in ancestor class $source.A)"
 
+test_output 'exceptions' 'import test.test_exceptions;' ok
+
 # switch to full bootstrapping mode now that importing works
-opts="-Gl $root -l $root/lib -l lib"
+opts="-Gl $root -l $root/lib:lib:.libs"
 
 test_output 'correct caching of crack.lang' \
     'import crack.lang; print("ok");' \
@@ -920,6 +937,8 @@ test_output 'IO classes' \
      f.format(o);
      ' \
      'string-100100-1524157875019052115241578750190521<Object>'
+
+test_output 'bootstrapped exception tests' 'import test.test_exceptions2;' ok
 
 test_output 'C Comments' \
     '/* comment text */print("ok");' \

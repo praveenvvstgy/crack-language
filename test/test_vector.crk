@@ -65,13 +65,16 @@ if (fmtResult != expectedResult){
    errors.append("Incorrect formatted output:");
    errors.append(fmtResult);
 }
- // .add() method
- 
-result:=V.add();
 
-if (result != -33) {
+ // .sum() method
+result:=V.sum();
+expected:=0;
+
+for (v :in V) expected += v;
+
+if (result != expected) {
    fmt = StringFormatter();
-   fmt `"add method failed: expected -33, got $result"`;
+   fmt `"add method failed: expected $expected, got $result"`;
    errors.append(fmt.createString());
 }
 

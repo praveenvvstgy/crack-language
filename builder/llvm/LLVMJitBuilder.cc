@@ -21,6 +21,7 @@
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/JIT.h>  // link in the JIT
 #include <llvm/Module.h>
+#include <llvm/Intrinsics.h>
 
 using namespace std;
 using namespace llvm;
@@ -29,11 +30,14 @@ using namespace builder;
 using namespace builder::mvll;
 
 
-void LLVMJitBuilder::engineBindModule(ModuleDef *moduleDef) {
-    bindJitModule(module);
+void LLVMJitBuilder::engineBindModule(BModuleDef *moduleDef) {
+    // note, this->module and moduleDef->rep should be ==
+    bindJitModule(moduleDef->rep);
 }
 
-void LLVMJitBuilder::engineFinishModule(ModuleDef *moduleDef) {
+void LLVMJitBuilder::engineFinishModule(BModuleDef *moduleDef) {
+    // note, this->module and moduleDef->rep should be ==
+
     // XXX right now, only checking for > 0, later perhaps we can
     // run specific optimizations at different levels
     if (options->optimizeLevel) {
@@ -54,15 +58,18 @@ void LLVMJitBuilder::engineFinishModule(ModuleDef *moduleDef) {
         // Simplify the control flow graph (deleting unreachable blocks, etc).
         passMan.add(llvm::createCFGSimplificationPass());
 
-        passMan.run(*module);
+        passMan.run(*moduleDef->rep);
     }
     Function *delFunc = module->getFunction("__del__");
     if (delFunc) {
-        BModuleDefPtr::cast(moduleDef)->cleanup =
-                reinterpret_cast<void (*)()>(
-                        execEng->getPointerToFunction(delFunc)
-                        );
+        moduleDef->cleanup = reinterpret_cast<void (*)()>(
+                                execEng->getPointerToFunction(delFunc)
+                             );
     }
+}
+
+void LLVMJitBuilder::fixClassInstRep(BTypeDef *type) {
+    type->getClassInstRep(module, execEng);
 }
 
 ExecutionEngine *LLVMJitBuilder::bindJitModule(Module *mod) {
@@ -74,6 +81,7 @@ ExecutionEngine *LLVMJitBuilder::bindJitModule(Module *mod) {
         else {
 
             llvm::JITEmitDebugInfo = true;
+            llvm::JITExceptionHandling = true;
 
             // we have to specify all of the arguments for this so we can turn
             // off "allocate globals with code."  In addition to being
@@ -130,7 +138,7 @@ ModuleDefPtr LLVMJitBuilder::createModule(Context &context,
 
     assert(!module);
     LLVMContext &lctx = getGlobalContext();
-    module = new llvm::Module(name, lctx);
+    createLLVMModule(name);
 
     if (options->debugMode) {
         debugInfo = new DebugInfo(module, name);
@@ -143,72 +151,23 @@ ModuleDefPtr LLVMJitBuilder::createModule(Context &context,
         module->getOrInsertFunction("__main__", Type::getVoidTy(lctx), NULL);
     func = llvm::cast<llvm::Function>(c);
     func->setCallingConv(llvm::CallingConv::C);
-    builder.SetInsertPoint(BasicBlock::Create(lctx, "__main__", func));
+    createFuncStartBlocks("__main__");
 
-    // name some structs in this module
-    BTypeDef *classType = BTypeDefPtr::arcast(context.construct->classType);
-    module->addTypeName(".struct.Class", classType->rep);
-    BTypeDef *vtableBaseType = BTypeDefPtr::arcast(
-                                  context.construct->vtableBaseType);
-    module->addTypeName(".struct.vtableBase", vtableBaseType->rep);
-
-    // all of the "extern" primitive functions have to be created in each of
-    // the modules - we can not directly reference across modules.
-
-    BTypeDef *int32Type = BTypeDefPtr::arcast(context.construct->int32Type);
-    BTypeDef *int64Type = BTypeDefPtr::arcast(context.construct->int64Type);
-    BTypeDef *uint64Type = BTypeDefPtr::arcast(context.construct->uint64Type);
-    BTypeDef *intType = BTypeDefPtr::arcast(context.construct->intType);
-    BTypeDef *voidType = BTypeDefPtr::arcast(context.construct->int32Type);
-    BTypeDef *float32Type = BTypeDefPtr::arcast(context.construct->float32Type);
-    BTypeDef *byteptrType =
-        BTypeDefPtr::arcast(context.construct->byteptrType);
-    BTypeDef *voidptrType =
-        BTypeDefPtr::arcast(context.construct->voidptrType);
-
-    // create "void *calloc(uint size)"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, voidptrType, "calloc", 2);
-        f.addArg("size", intType);
-        f.addArg("size", intType);
-        f.setSymbolName("calloc");
-        f.finish();
-        callocFunc = f.funcDef->getRep(*this);
-    }
-
-    // create "array[byteptr] __getArgv()"
-    {
-        TypeDefPtr array = context.ns->lookUp("array");
-        assert(array.get() && "array not defined in context");
-        TypeDef::TypeVecObjPtr types = new TypeDef::TypeVecObj();
-        types->push_back(context.construct->byteptrType.get());
-        TypeDefPtr arrayOfByteptr =
-            array->getSpecialization(context, types.get());
-        FuncBuilder f(context, FuncDef::noFlags,
-                      BTypeDefPtr::arcast(arrayOfByteptr),
-                      "__getArgv",
-                      0
-                      );
-        f.setSymbolName("__getArgv");
-        f.finish();
-    }
-
-    // create "int __getArgc()"
-    {
-        FuncBuilder f(context, FuncDef::noFlags, intType, "__getArgc", 0);
-        f.setSymbolName("__getArgc");
-        f.finish();
-    }
-
+    createModuleCommon(context);
+    
     bindJitModule(module);
 
-    BModuleDef *moduleDef = new BModuleDef(name, context.ns.get());
+    BModuleDef *moduleDef = new BModuleDef(name, context.ns.get(), module);
     return moduleDef;
 }
 
 void LLVMJitBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
     assert(module);
-    builder.CreateRetVoid();
+
+    // if there was a top-level throw, we could already have a terminator.  
+    // Generate a return instruction if not.
+    if (!builder.GetInsertBlock()->getTerminator())
+        builder.CreateRetVoid();
 
     // emit the cleanup function
 
@@ -234,7 +193,7 @@ void LLVMJitBuilder::closeModule(Context &context, ModuleDef *moduleDef) {
         verifyModule(*module, llvm::PrintMessageAction);
 
     // let jit or linker finish module before run/link
-    engineFinishModule(moduleDef);
+    engineFinishModule(BModuleDefPtr::cast(moduleDef));
 
     // store primitive functions from an extension
     if (moduleDef->fromExtension) {
