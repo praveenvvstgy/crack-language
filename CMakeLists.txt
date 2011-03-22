@@ -160,31 +160,41 @@ add_custom_target(screen
 # optional extensions
 
 # GTK
-find_package(GTK2 QUIET 2.6 COMPONENTS gtk)
-if(GTK2_FOUND)
-   message(STATUS "Found GTK, will build extension")
+find_library(GTK2_LIBRARY NAMES gtk-x11-2.0 gtk-quartz-2.0)
+find_path(GTK2_INCLUDE_DIR NAMES gtkversion.h)
+if(GTK2_LIBRARY AND GTK2_INCLUDE_DIR)
+  SET(GTK2_FOUND_PRELIM TRUE)
+endif(GTK2_LIBRARY AND GTK2_INCLUDE_DIR)
+
+if(GTK2_FOUND_PRELIM)
+   find_package(GTK2 QUIET 2.6 COMPONENTS gtk)
    find_package(GTK2_GDKPIXBUF QUIET)
-   include_directories(${GTK2_INCLUDE_DIRS})
-   add_library(gtk SHARED opt/_gtk.cc)
-   set_target_properties(gtk
-                      PROPERTIES
-                      OUTPUT_NAME _gtk
-                      COMPILE_FLAGS
-                      ${GTK2_GDKPIXBUF_INCLUDE_DIRS}
-                      PREFIX ""
-                      LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
-                      )
-   target_link_libraries( gtk
-                          ${GTK2_LIBRARIES} ${GTK2_GDKPIXBUF_LDFLAGS}
+   if (GTK2_GDKPIXBUF_FOUND)
+      message(STATUS "Found GTK, will build extension")
+      include_directories(${GTK2_INCLUDE_DIRS})
+      add_library(gtk SHARED opt/_gtk.cc)
+      set_target_properties(gtk
+                         PROPERTIES
+                         OUTPUT_NAME _gtk
+                         COMPILE_FLAGS
+                         ${GTK2_GDKPIXBUF_INCLUDE_DIRS}
+                         PREFIX ""
+                         LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
                          )
+      target_link_libraries( gtk
+                             ${GTK2_LIBRARIES} ${GTK2_GDKPIXBUF_LDFLAGS}
+                            )
+   endif()
 endif()
 
 # pcre
 find_library(PCRE_LIBRARY NAMES pcre)
 find_path(PCRE_INCLUDE_DIR NAMES pcre.h)
+
 if(PCRE_LIBRARY AND PCRE_INCLUDE_DIR)
   SET(PCRE_FOUND TRUE)
 endif(PCRE_LIBRARY AND PCRE_INCLUDE_DIR)
+
 if (PCRE_FOUND)
    message(STATUS "Found pcre, will build extension")
    include_directories(${PCRE_INCLUDE_DIR})
@@ -204,41 +214,62 @@ endif()
 # SDL
 find_package(SDL QUIET)
 if(SDL_FOUND)
-   message(STATUS "Found SDL, will build extension")
-   include_directories(${SDL_INCLUDE_DIR})
-   add_library(sdl SHARED opt/_sdl.cc)
-   set_target_properties(sdl
-                      PROPERTIES
-                      OUTPUT_NAME _sdl
-                      PREFIX ""
-                      LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
-                      )
-   target_link_libraries( sdl
-                          ${SDL_LIBRARY}
+   find_library(SDL_LIBRARY NAMES SDL)
+   find_path(SDL_INCLUDE_DIR NAMES SDL.h)
+
+   if(SDL_LIBRARY AND SDL_INCLUDE_DIR)
+     SET(SDL_FOUND_PRELIM TRUE)
+   endif(SDL_LIBRARY AND SDL_INCLUDE_DIR)
+
+   if (SDL_FOUND_PRELIM)
+      message(STATUS "Found SDL, will build extension")
+      include_directories(${SDL_INCLUDE_DIR})
+      add_library(sdl SHARED opt/_sdl.cc)
+      set_target_properties(sdl
+                         PROPERTIES
+                         OUTPUT_NAME _sdl
+                         PREFIX ""
+                         LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
                          )
+      target_link_libraries( sdl
+                             ${SDL_LIBRARY}
+                            )
+   endif()
 endif()
 
 # OpenGL
 find_package(OpenGL QUIET)
 if(OPENGL_FOUND)
-   message(STATUS "Found OpenGL, will build extension")
-   include_directories(${OPENGL_INCLUDE_DIR})
-   add_library(gl SHARED opt/_gl.cc)
-   set_target_properties(gl
-                      PROPERTIES
-                      OUTPUT_NAME _gl
-                      PREFIX ""
-                      LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
-                      )
-   target_link_libraries( gl
-                          ${OPENGL_LIBRARIES}
+   find_path(OPENGL_INCLUDE_DIR NAMES gl.h)
+   if(OPENGL_INCLUDE_DIR)
+     SET(OPENGL_FOUND_PRELIM TRUE)
+   endif(OPENGL_INCLUDE_DIR)
+   
+   if (OPENGL_FOUND_PRELIM)
+      message(STATUS "Found OpenGL, will build extension")
+      include_directories(${OPENGL_INCLUDE_DIR})
+      add_library(gl SHARED opt/_gl.cc)
+      set_target_properties(gl
+                         PROPERTIES
+                         OUTPUT_NAME _gl
+                         PREFIX ""
+                         LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/.libs/"
                          )
+      target_link_libraries( gl
+                             ${OPENGL_LIBRARIES}
+                            )
+   endif()
 endif()
 
 # Cairo
 IF (PKG_CONFIG_FOUND)
    pkg_check_modules(CAIRO cairo>=1.8)
-   if(CAIRO_FOUND)
+   find_path(CAIRO_INCLUDE_DIR NAMES cairo.h)
+   if(CAIRO_INCLUDE_DIR)
+     SET(CAIRO_FOUND_PRELIM TRUE)
+   endif(CAIRO_INCLUDE_DIR)
+
+   if(CAIRO_FOUND_PRELIM)
       message(STATUS "Found Cairo, will build extension")
       add_library(cairo SHARED opt/_cairo.cc)
       set_target_properties(cairo
@@ -252,7 +283,7 @@ IF (PKG_CONFIG_FOUND)
                             )
    endif()
 
-   if(CAIRO_FOUND AND SDL_FOUND)
+   if(CAIRO_FOUND_PRELIM AND SDL_FOUND)
       add_library(cairosdl SHARED opt/_cairosdl.cc opt/cairosdl.c opt/cairosdl.h)
       set_target_properties(cairosdl
                          PROPERTIES
