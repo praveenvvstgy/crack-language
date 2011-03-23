@@ -1,0 +1,202 @@
+
+import crack.runtime registerHook, EXCEPTION_MATCH_FUNC;
+
+# temporary work-around for the problem of trying to use the special .class
+# accessor from a VTableBase object.
+class Obj : VTableBase {}
+
+int exceptionMatchFunc(Class classObj, Obj obj) {
+    return obj.class.isSubclass(classObj) ? 1 : 0;
+}
+
+registerHook(EXCEPTION_MATCH_FUNC, exceptionMatchFunc);
+
+
+class Exception : VTableBase {}
+class FooError : Exception {
+    int val;
+    oper init(int val0) : val = val0 {}
+}
+class NotException : VTableBase {}
+
+bool cleanedUp;
+class Cleanup { oper release() { cleanedUp = 1; } }
+
+if (1) {
+    bool gotIt;
+    cleanedUp = 0;
+    try {
+        Cleanup c;
+        throw Exception();
+    } catch (Exception ex) {
+        gotIt = 1;
+    }
+    if (!gotIt)
+        puts('FAILED basic exception handling.');
+
+    if (!cleanedUp)
+        puts('FAILED basic exception cleanup.');
+}
+
+# exception discrimination
+if (1) {
+    bool gotIt;
+    try {
+        throw Exception();
+    } catch (FooError ex) {
+        puts('FAILED exception discrimination: wrong exception chosen');
+    } catch (Exception ex) {
+        gotIt = 1;
+    }
+    if (!gotIt)
+        puts('FAILED exception discrimination: correct catch not chosen');
+}
+
+if (1) {
+    bool gotFoo, gotEx;
+    cleanedUp = 0;
+    try {
+        try {
+            Cleanup c;
+            throw Exception();
+        } catch (FooError ex) {
+            gotFoo = 1;
+        }
+    } catch (Exception ex) {
+        gotEx = 1;
+    }
+    if (gotFoo)
+        puts('FAILED nested exception handling (matched inner catch).');
+
+    if (!gotEx)
+        puts('FAILED nested exception handling (missed catch).');
+
+    if (!cleanedUp)
+        puts('FAILED nested exception cleanup.');
+}
+
+if (1) {
+    bool didBreak;
+    void foo() {
+        while (1) {
+            try { throw Exception(); }
+            catch (FooError ex) { return; }
+            catch (Exception ex) { break; }
+        }
+        didBreak = 1;
+    }
+    foo();
+    if (!didBreak)
+        puts('FAILED terminality check.');
+}
+
+if (1) {
+    int val;
+    try {
+        throw FooError(1010);
+    } catch (FooError ex) {
+        val = ex.val;
+    }
+    if (val != 1010)
+        puts('FAILED getting the exception object');
+}
+
+if (1) {
+    void f() { throw Exception(); }
+}
+
+if (1) {
+    cleanedUp = 0;
+    void f() {
+        Cleanup c;
+        throw Exception();
+    }
+    try {
+        f();
+    } catch (Exception ex) {
+    }
+    if (!cleanedUp)
+        puts('FAILED cleanup in nested contexts');
+}
+
+if (1) {
+    cleanedUp = 0;
+    void g() {
+        throw Exception();
+    }
+
+    void f() {
+        Cleanup c;;
+        g();
+    }
+
+    try {
+        f();
+    } catch (Exception ex) {
+    }
+
+    if (!cleanedUp)
+        puts('FAILED pass-through cleanup never got called');
+}
+
+if (1) {
+    cleanedUp = 0;
+    void f() {
+        Cleanup c;
+        try {
+            throw Exception();
+        } catch (FooError ex) {
+        }
+    }
+    
+    try {
+        f();
+    } catch (Exception ex) {
+    }
+    
+    if (!cleanedUp)
+        puts('FAILED cleanup outside of try/catch');
+}
+
+# exceptions raised from cleanups to the next cleanup
+if (1) {
+    int cleanupA, cleanupB;
+    bool caughtException;
+    class A { oper release() { ++cleanupA; } }
+    class B { oper release() { ++cleanupB; throw Exception(); } }
+    try {
+        A a;
+        B b;
+    } catch (Exception ex) {
+        caughtException = 1;
+    }
+    
+    if (cleanupB < 1)
+        puts('FAILED exceptions from cleanups: B cleanup not called.');
+    else if (cleanupB > 1)
+        puts('FAILED exceptions from cleanups: B cleanup called multiple '
+              'times'
+             );
+    
+    if (cleanupA != 1)
+        puts('FAILED exceptions from cleanups: A cleanup not called once');
+    
+    if (!caughtException)
+        puts('FAILED exceptions from cleanups: exception not raised or '
+              'caught'
+             );
+}
+
+puts('ok');
+
+// try block ends with a terminator
+#void func() {
+#    try {
+#        return;
+#    } catch (Exception ex) {
+#    }
+#}
+
+// test catching exceptions defined in other modules
+
+// test multiple try statements in the same context.
