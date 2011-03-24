@@ -1,0 +1,74 @@
+import crack.math PI, sqrt;
+import crack.lang CString;
+import snippetBase snippetClass;
+import crack.ext._cairo cairo_t, cairo_surface_t, cairo_image_surface_create_from_png, 
+                         cairo_image_surface_get_width, cairo_image_surface_get_height,
+                         cairo_translate, cairo_rotate, cairo_scale, 
+                         cairo_set_source_surface, cairo_paint, 
+                         cairo_surface_destroy, cairo_pattern_t,
+                         cairo_pattern_create_for_surface, cairo_matrix_t, 
+                         cairo_pattern_set_extend, cairo_matrix_init_scale,
+                         cairo_pattern_set_matrix, cairo_rectangle,
+                         cairo_fill, CAIRO_EXTEND_REPEAT,
+                         cairo_set_source, cairo_pattern_destroy,
+                         cairo_matrix_new;
+
+class imageClass:snippetClass{
+   oper init(){
+      name="image";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      int              w, h;
+      cairo_surface_t image;
+
+      image = cairo_image_surface_create_from_png (CString("data/romedalen.png").buffer);
+      w = cairo_image_surface_get_width (image);
+      h = cairo_image_surface_get_height (image);
+
+      cairo_translate (cr, 128.0, 128.0);
+      cairo_rotate (cr, 45* PI/180);
+      cairo_scale  (cr, 256.0/w, 256.0/h);
+      cairo_translate (cr, -0.5*w, -0.5*h);
+
+      cairo_set_source_surface (cr, image, 0, 0);
+      cairo_paint (cr);
+      cairo_surface_destroy (image);
+   }
+}
+
+class imagePatternClass:snippetClass{
+   oper init(){
+      name="image_pattern";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      int              w, h;
+      cairo_surface_t  image;
+      cairo_pattern_t  pattern;
+      cairo_matrix_t   matrix=cairo_matrix_new();
+
+      image = cairo_image_surface_create_from_png (CString("data/romedalen.png").buffer);
+      w = cairo_image_surface_get_width (image);
+      h = cairo_image_surface_get_height (image);
+
+      pattern = cairo_pattern_create_for_surface (image);
+      cairo_pattern_set_extend (pattern, CAIRO_EXTEND_REPEAT);
+
+      cairo_translate (cr, 128.0, 128.0);
+      cairo_rotate (cr, PI / 4);
+      cairo_scale (cr, 1 / sqrt (2), 1 / sqrt (2));
+      cairo_translate (cr, -128.0, -128.0);
+
+      cairo_matrix_init_scale (matrix, w/256.0 * 5.0, h/256.0 * 5.0);
+      cairo_pattern_set_matrix (pattern, matrix);
+
+      cairo_set_source (cr, pattern);
+
+      cairo_rectangle (cr, 0, 0, 256.0, 256.0);
+      cairo_fill (cr);
+
+      cairo_pattern_destroy (pattern);
+      cairo_surface_destroy (image);
+   }
+}
