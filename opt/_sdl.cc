@@ -13,7 +13,7 @@ uint8_t SDL_KeyboardEvent_GetState(SDL_KeyboardEvent *evt) { return evt->state; 
 SDL_MouseMotionEvent *SDL_Event_GetMotion(SDL_Event *evt) { return &evt->motion; }
 uint SDL_MouseMotionEvent_GetX(SDL_MouseMotionEvent *evt) { return evt->x; }
 uint SDL_MouseMotionEvent_GetY(SDL_MouseMotionEvent *evt) { return evt->y; }
-
+void *SDL_SetVideoMode_void(int width, int height, int bpp, uint32_t flags){ return (void *)SDL_SetVideoMode(height, width, bpp, flags);}
 
 #include "ext/Module.h"
 #include "ext/Type.h"
@@ -31,6 +31,9 @@ void crack_ext__sdl_init(crack::ext::Module *mod) {
 
     crack::ext::Type *type_SDL_MouseMotionEvent = mod->addType("SDL_MouseMotionEvent");
     type_SDL_MouseMotionEvent->finish();
+
+    crack::ext::Type *type_SDL_Rect = mod->addType("SDL_Rect");
+    type_SDL_Rect->finish();
 
     crack::ext::Type *type_SDL_Surface = mod->addType("SDL_Surface");
     type_SDL_Surface->finish();
@@ -73,6 +76,14 @@ void crack_ext__sdl_init(crack::ext::Module *mod) {
 
     f = mod->addFunc(type_SDL_Surface, "SDL_SetVideoMode",
                      (void *)SDL_SetVideoMode
+                     );
+    f->addArg(type_int, "width");
+    f->addArg(type_int, "height");
+    f->addArg(type_int, "bpp");
+    f->addArg(type_uint32, "flags");
+
+    f = mod->addFunc(type_voidptr, "SDL_SetVideoMode_void",
+                     (void *)SDL_SetVideoMode_void
                      );
     f->addArg(type_int, "width");
     f->addArg(type_int, "height");
