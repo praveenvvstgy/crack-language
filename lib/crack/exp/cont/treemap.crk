@@ -6,6 +6,8 @@
 @import crack.exp.ann define, export, exporter;
 @exporter;
 
+// TODO: add ordered map, look at BPS "a B-tree with a twist pointer set"
+
 @define GenericTreeMap(Name, KeyT, ValT) {
 
     class Name {
