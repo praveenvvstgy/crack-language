@@ -1,0 +1,63 @@
+import crack.math PI;
+import crack.lang CString;
+import snippetBase snippetClass;
+import crack.ext._cairo cairo_t, cairo_surface_t, cairo_set_line_width,
+                         cairo_arc, cairo_stroke, cairo_rectangle,
+                         cairo_fill, cairo_line_to, cairo_move_to,
+                         cairo_clip, cairo_new_path,
+                         cairo_set_source_rgb, 
+                         cairo_image_surface_create_from_png,
+                         cairo_image_surface_get_width,
+                         cairo_image_surface_get_height,
+                         cairo_scale,
+                         cairo_set_source_surface, cairo_paint,
+                         cairo_surface_destroy;
+
+class clipClass:snippetClass{
+   oper init(){
+      name="clip";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      cairo_arc (cr, 128.0, 128.0, 76.8, 0, 2 * PI);
+      cairo_clip (cr);
+
+      cairo_new_path (cr);  /* current path is not
+                               consumed by cairo_clip() */
+      cairo_rectangle (cr, 0, 0, 256, 256);
+      cairo_fill (cr);
+      cairo_set_source_rgb (cr, 0, 1, 0);
+      cairo_move_to (cr, 0, 0);
+      cairo_line_to (cr, 256, 256);
+      cairo_move_to (cr, 256, 0);
+      cairo_line_to (cr, 0, 256);
+      cairo_set_line_width (cr, 10.0);
+      cairo_stroke (cr);
+   }
+}
+
+class clipImageClass:snippetClass{
+   oper init(){
+      name="clip_image";
+   }
+
+   void draw(cairo_t cr, cairo_surface_t surface){
+      int              w, h;
+      cairo_surface_t  image;
+
+      cairo_arc (cr, 128.0, 128.0, 76.8, 0, 2*PI);
+      cairo_clip (cr);
+      cairo_new_path (cr); /* path not consumed by clip()*/
+
+      image = cairo_image_surface_create_from_png (CString("data/romedalen.png").buffer);
+      w = cairo_image_surface_get_width (image);
+      h = cairo_image_surface_get_height (image);
+
+      cairo_scale (cr, 256.0/w, 256.0/h);
+
+      cairo_set_source_surface (cr, image, 0, 0);
+      cairo_paint (cr);
+
+      cairo_surface_destroy (image);
+   }
+}
