@@ -7,6 +7,7 @@
 // calculations
 
 import crack.lang free, die;
+import crack.io cout;
 import crack.io Formatter, Writer;
 import crack.math max;
 @import crack.exp.ann define, export, exporter, implements, interface;
@@ -106,7 +107,7 @@ import crack.math max;
          _size = size,
          _offset = offset,
          _stride = stride { }
-
+         
       @_getter(uint, count, _size);
       @_getter(uint, size, _size);
       @_getter(Tpe$$Block, block, _block);
@@ -153,12 +154,18 @@ import crack.math max;
          return _size;
       }
 
-      // Copy this vector
-      Tpe$$Vector copy(){
+      // Copy this vector, optionally with this vector's values
+      Tpe$$Vector copy(bool copyElems){
          newBlock:=Tpe$$Block(_size * _stride);
          newVector:=Tpe$$Vector(newBlock, _size, _stride, _offset);
-         newVector.set(this);
+         if (copyElems)
+            newVector.set(this);
          return newVector;
+      }
+
+      // Copy this vector, with this vector's values
+      Tpe$$Vector copy(){
+         return copy(true);
       }
 
       // Copy this vector
@@ -182,6 +189,15 @@ import crack.math max;
             newBlock.rep[i]=_block.rep[i];
          return newVector;
       }
+
+      // Apply the given function to the vector, returning a new vector
+      Tpe$$Vector apply(Class f){
+         newVector:=this.copy(false);
+         for (uint i=0; i<_size; i++)
+            newVector[i] = f(this[i]);
+         return newVector;
+      }
+
 
       void append(Tpe elem) {
          if (_size * _stride >= _block.cap)

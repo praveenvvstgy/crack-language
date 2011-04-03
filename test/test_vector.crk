@@ -2,7 +2,6 @@
 // Test generic vector class
 
 // Copyright 2010 Conrad Steenberg
-// Test generic JSON serialization
 
 import crack.io cout, FDWriter, StringWriter, Writer;
 import crack.lang cmp, free, die;
