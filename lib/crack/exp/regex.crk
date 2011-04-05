@@ -138,7 +138,6 @@ class Regex : _RegexBase {
     ## object if it is found or null if not.
     Match search(String subject) {
         captures := array[int](__captureCount * 3);
-        Match result;
         rc := pcre_exec(_rx, null, subject.buffer, subject.size, 0, 0, 
                         captures,
                         __captureCount * 3

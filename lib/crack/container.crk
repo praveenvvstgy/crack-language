@@ -451,6 +451,14 @@ class Array : _ArrayIface {
         return __rep[index];
     }
 
+    Object pop() {
+        if (__size>0)
+           return __rep[--__size];
+        else
+           return null;
+    }
+
+
     void oper []=(uint index, Object elem) {
         if (index > __size)
             die('Index out of range in Array.oper []=');
