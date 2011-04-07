@@ -1,5 +1,5 @@
 // Copyright 2009-2011 Google Inc., Shannon Weyrick <weyrick@mozek.us>
-                
+
 #include "LLVMBuilder.h"
 
 #include "ArrayTypeDef.h"
@@ -2355,6 +2355,16 @@ void LLVMBuilder::createModuleCommon(Context &context) {
         f.setSymbolName("__CrackCleanupException");
         f.finish();
     }
+    
+    // create "__CrackExceptionFrame()"
+    {
+        FuncBuilder f(context, FuncDef::noFlags, voidType,
+                      "__CrackExceptionFrame",
+                      0
+                      );
+        f.setSymbolName("__CrackExceptionFrame");
+        f.finish();
+    }
 
 }
 
@@ -2390,7 +2400,7 @@ void LLVMBuilder::importSharedLibrary(const string &name,
     }
 }
 
-void LLVMBuilder::registerImportedVar(Context &context, VarDef *varDef) {
+void LLVMBuilder::registerImportedDef(Context &context, VarDef *varDef) {
     // no-op for LLVM builder.
 }
 

@@ -855,7 +855,7 @@ ExprPtr Parser::parseSecondary(Expr *expr0, unsigned precedence) {
             FuncDefPtr funcDef =
                context->lookUp("oper []", args, expr->type.get());
             if (!funcDef)
-               error(tok, SPUG_FSTR("'oper []=' not defined for " <<
+               error(tok, SPUG_FSTR("'oper []' not defined for " <<
                                      expr->type->name << 
                                      " with these arguments: (" << args << ")"
                                     )
@@ -2063,6 +2063,8 @@ void Parser::parseReturnStmt() {
 void Parser::parseImportStmt(Namespace *ns) {
    ModuleDefPtr mod;
    string canonicalName;
+   builder::Builder &builder = context->construct->getCurBuilder();
+
    Token tok = getToken();
    if (tok.isIdent()) {
       toker.putBack(tok);
@@ -2084,9 +2086,10 @@ void Parser::parseImportStmt(Namespace *ns) {
                          )
                );
       else
-          context->builder.initializeImport(mod.get(),
-                                            // HACK check for annotation?
-                                            ns == context->compileNS.get());
+         builder.initializeImport(mod.get(),
+                                  // HACK check for annotation?
+                                  ns == context->compileNS.get()
+                                  );
 
    } else if (!tok.isString()) {
       unexpected(tok, "expected string constant");
@@ -2115,10 +2118,7 @@ void Parser::parseImportStmt(Namespace *ns) {
 
    if (!mod) {
       try {
-         context->construct->rootBuilder->importSharedLibrary(name, syms,
-                                                            *context,
-                                                            ns
-                                                            );
+         builder.importSharedLibrary(name, syms, *context, ns);
       } catch (const spug::Exception &ex) {
          error(tok, ex.getMessage());
       }
@@ -2141,7 +2141,7 @@ void Parser::parseImportStmt(Namespace *ns) {
                                   canonicalName
                                  )
                   );
-         context->builder.registerImportedVar(*context, symVal.get());
+         builder.registerImportedDef(*context, symVal.get());
          ns->addAlias(symVal.get());
       }
    }

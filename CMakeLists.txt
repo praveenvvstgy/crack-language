@@ -18,7 +18,8 @@ set(LLVM_MIN_VERSION_TEXT  "2.8")
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/modules )
 
-#set(CMAKE_CXX_FLAGS_DEBUG "-fexceptions -g -Wall -Winline -W -Wwrite-strings -Wno-unused")
+set(CMAKE_CXX_FLAGS_DEBUG "-D_DEBUG -g")#-Wall -Winline -W -Wwrite-strings -Wno-unused")
+set(CMAKE_CXX_FLAGS_RELEASE "-DNDEBUG -O3")
 
 MESSAGE( STATUS "PROJECT_SOURCE_DIR: " ${PROJECT_SOURCE_DIR} )
 MESSAGE( STATUS "CMAKE_MODULE_PATH: " ${CMAKE_MODULE_PATH} )
@@ -66,7 +67,7 @@ target_link_libraries( libcrack
                      )
 
 # libCrackExtStub
-add_library(libcrackextstub SHARED ext/Stub.cc)
+add_library(libcrackextstub SHARED ext/Stub.cc debug/NativeDebugTools.cc)
 set_target_properties(libcrackextstub
                       PROPERTIES
                       OUTPUT_NAME CrackExtStub
