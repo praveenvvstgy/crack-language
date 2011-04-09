@@ -190,15 +190,6 @@ import crack.math max;
          return newVector;
       }
 
-      // Apply the given function to the vector, returning a new vector
-      Tpe$$Vector apply(Class f){
-         newVector:=this.copy(false);
-         for (uint i=0; i<_size; i++)
-            newVector[i] = f(this[i]);
-         return newVector;
-      }
-
-
       void append(Tpe elem) {
          if (_size * _stride >= _block.cap)
            _block.realloc(_block.cap * 2);
@@ -228,7 +219,7 @@ import crack.math max;
 
       Tpe oper [](uint index) {
          if (index > _size) // TODO throw exception
-            die('Index out of range in Vector.oper []');
+            die('Index $index out of range in Vector.oper []');
          return _block.rep[_offset + _stride * index];
       }
 
@@ -245,8 +236,10 @@ import crack.math max;
 
       void oper []=(uint index, Tpe elem) {
          aindex:=_offset + index * _stride;
-         if (index > _size)
-            die('Index out of range in Vector.oper []=');
+         if (index >= _size){
+            cout `Index $index out of range $_size in Vector.oper []=\n`;
+            die('exiting');
+         }
          
             tmp := _block.rep[aindex];
             _block.rep[aindex] = elem;
