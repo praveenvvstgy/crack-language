@@ -51,6 +51,9 @@ class FuncDef : public VarDef {
         TypeDef::AncestorPath pathToFirstDeclaration;
 
         FuncDef(Flags flags, const std::string &name, size_t argCount);
+
+        /** Overrides getFullName() so we can add a signature. */
+        virtual std::string getFullName() const;
         
         /**
          * Returns true if 'args' matches the types of the functions 

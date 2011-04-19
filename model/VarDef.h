@@ -44,7 +44,7 @@ class VarDef : public virtual spug::RCBase {
         /**
          * Returns the fully qualified name of the definition.
          */        
-        std::string getFullName() const;
+        virtual std::string getFullName() const;
         
         /**
          * Set namespace owner
