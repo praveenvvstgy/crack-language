@@ -2,6 +2,7 @@
 
 #include "FuncDef.h"
 
+#include <sstream>
 #include "Context.h"
 #include "ArgDef.h"
 #include "Expr.h"
@@ -17,6 +18,22 @@ FuncDef::FuncDef(Flags flags, const std::string &name, size_t argCount) :
     VarDef(0, name),
     flags(flags),
     args(argCount) {
+}
+
+string FuncDef::getFullName() const {
+    ostringstream argText;
+    argText << VarDef::getFullName() << '(';
+    bool first = true;
+    for (int i = 0; i < args.size(); ++i) {
+        if (!first)
+            argText << ",";
+        else
+            first = false;
+        argText << args[i]->type->getFullName();
+    }
+    argText << ')';
+
+    return argText.str();
 }
 
 bool FuncDef::matches(Context &context, const vector<ExprPtr> &vals, 
