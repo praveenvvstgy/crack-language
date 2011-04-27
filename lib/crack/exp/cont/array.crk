@@ -102,7 +102,7 @@
                     return next();
                 }
             }
-
+            
             bool isTrue() {
                 return __index < __arr.count();
             }
@@ -113,7 +113,7 @@
             __cap = initCapacity,
             __size = 0 {
         }
-
+        
         oper init() : 
             __rep = array[Elem](16), 
             __cap = 16,
@@ -129,7 +129,7 @@
             }
             free(__rep);
         }
-
+        
         void realloc(uint newCapacity) {
             if (newCapacity < __cap)
                 die('Array.realloc() - decreasing capacity');
@@ -158,15 +158,22 @@
             __size = __size + 1;
         }
 
-        @final
+        Elem pop() {
+           if (__size>0)
+              return __rep[--__size];
+           else
+              return null;
+        }
+
+		@final
         ArrayIter iter() {
             return ArrayIter(this);
         }
-
+        
         uint capacity() {
             return __cap;
         }
-        
+
         ## delete the element at 'index'.
         void delete(uint index) {
             if (index > __size)

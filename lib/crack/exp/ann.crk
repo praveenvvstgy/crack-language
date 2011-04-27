@@ -677,6 +677,7 @@ void export(CrackContext ctx) {
             mac.expand(ctx);
         }
     \n\0`;
+
     ctx.inject(f.buffer, l, code.createString().buffer);
 }
 
@@ -756,6 +757,7 @@ void interface(CrackContext ctx) {
         if (!(this is null)) get$(nameTok.getText())Object().oper release(); 
     }
 }\0`;
+
     ctx.inject(loc.getName(), loc.getLineNumber(), f.createString().buffer);
 
     # expand the body and opening bracket
@@ -766,6 +768,7 @@ void interface(CrackContext ctx) {
     loc = nameTok.getLocation();
     f = StringFormatter();
     f `class $(nameTok.getText()) : VTableBase\n\0`;
+
     ctx.inject(loc.getName(), loc.getLineNumber(), f.createString().buffer);
 }
 
