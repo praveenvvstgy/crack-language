@@ -1,0 +1,21 @@
+# Test GenericArray mergesort
+import crack.lang cmp, free, die;
+@import crack.exp.ann define, export, exporter, implements, interface;
+import crack.io Formatter, StringFormatter, Writer, cout;
+@import crack.exp.cont.array GenericArray, GenericPrimArray;
+
+@GenericPrimArray(dateArray, uint64)
+
+uint numElems=10, i;
+
+d:=dateArray(numElems);
+
+for(i=0; i<numElems; i++) d.append(numElems - i);
+
+sortedArray:=d.sort();
+
+for(i=0; i<numElems; i++)
+   if (sortedArray[i] != i+1) break;
+
+if (i==numElems) cout `ok\n`;
+else cout `Sorted element at index %i is incorrect\n`;
