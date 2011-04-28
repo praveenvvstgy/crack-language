@@ -43,6 +43,11 @@ import crack.ext._sdl SDL_Surface, SDL_Rect;
 }'
 
    @crack_internal
+   
+   class cairo_t;
+   class cairo_surface_t;
+   class SDL_Surface;
+   class SDL_Rect;
 
    // Constants
    /* Cairo pixel configuration.  This isn't tweakable, it just is. */
