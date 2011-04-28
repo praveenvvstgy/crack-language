@@ -760,7 +760,7 @@ class RBTreeNode {
         
         sibling := __sibling();
 
-        # case 2: sibling is red.        
+        # case 2: sibling is red.
         if (sibling.red) {
             # reverse the colors of the parent and sibling
             parent.red = true;
