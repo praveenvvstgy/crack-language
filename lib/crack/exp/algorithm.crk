@@ -44,7 +44,7 @@ void _quickSort3(Array A, int l, int r) {
         i++;
     }
     _quickSort3(A, l, j);
-    _quickSort3(A, i, r);    
+    _quickSort3(A, i, r);
 }
 
 void quickSort(Array A) {

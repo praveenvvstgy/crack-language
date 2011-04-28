@@ -95,7 +95,7 @@ class Directory : Object, Openable {
         if (_isValid)
             return _fileList.iter(); 
         else
-            return null;        
+            return null;
     }
     
     void writeTo(Writer out) {
