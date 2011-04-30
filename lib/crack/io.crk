@@ -1,0 +1,299 @@
+# Copyright 2009, Google Inc.
+# Basic input/output classes.
+
+import crack.lang die, AppendBuffer, Buffer, CString, WriteBuffer, 
+    ManagedBuffer, Writer;
+import crack.runtime float_str, strlen, write, malloc, memcpy, free, read;
+
+## Writer for a file descriptor.
+class FDWriter : Object, Writer {
+    int fd;
+
+    ## Constructs an FDWriter from a plain file descriptor.
+    oper init(int fd) : fd = fd {}
+
+    void write(Buffer buf) {
+        write(fd, buf.buffer, buf.size);
+    }
+    
+    Object getWriterObject() { return this; }
+};
+
+## Interface for all readers.  Readers support two flavors of read()
+## methods that allow you to read bytes from a stream.
+## This must be mixed in with something derived from Object, you must 
+## implement read(WriteBuffer) and getReaderObject().
+class Reader : VTableBase {
+
+    ## Reads enough bytes to fill the buffer, or as many bytes as are 
+    ## available from the source.  Returns the number of bytes read.    
+    uint read(WriteBuffer buffer) {
+        die('Reader.read(uint,byteptr) called');
+        return 0;
+    }
+    
+    String read(uint size) {
+        b := ManagedBuffer(size);
+        
+        # have to qualify with this because of an overloading bug.
+        s := this.read(b);
+        
+        # if the amount read is most of the buffer, just take ownership of the 
+        # buffer.
+        if (s >= size * 3 / 4) {
+            b.size = s;
+            return String(b, true);
+        } else {
+            # otherwise copy.
+            b.size = s;
+            return String(b);
+        }
+    }
+
+    # MixIn stuff
+    Object getReaderObject() {
+        die('Reader.getReaderObject() not implemented.');
+        return null;
+    }
+    oper bind() { if (!(this is null)) getReaderObject().oper bind(); }
+    oper release() { if (!(this is null)) getReaderObject().oper release(); }
+};
+
+## Reader to read from a file descriptor.
+class FDReader : Object, Reader {
+    int fd;
+    
+    oper init(int fd) : fd = fd {}
+    
+    ## Read up to 'size' bytes from the file descriptor into the buffer.
+    uint read(WriteBuffer buf) {
+        return uint(read(fd, buf.buffer, buf.size));
+    }
+
+    Object getReaderObject() { return this; }
+};
+
+## Format val into buf.  The number will be formatted into the _end_ of the 
+## buffer.
+## Returns the start index of the number.
+uint _format(uint64 val,  ## value to format
+             byteptr buf, ## buffer to format into.  This must be large enough 
+                          ## to hold the string representation of the number.
+             uint size    ## size of the buffer
+             ) {
+    uint i = size;
+
+    # zero is special
+    if (!val) {
+        i = i - 1;
+        buf[i] = 48;
+        return i;
+    }
+    
+    uint64 v = val;
+    while (v) {
+        i = i - 1;
+        digit := byte(v % 10);
+        v = v / 10;
+        buf[i] = 48 + digit;
+    }
+    return i;
+}
+
+## Format an integer into the buffer.  "buf" must be at least 21 characters.
+## Returns the index to the beginning of the number.
+uint _format(int64 val, byteptr buf, uint size) {
+    uint i;   
+    if (val < 0) {
+        # negate the value, format the absolute value then add the sign to the 
+        # beginning
+        raw := uint64(-val);
+        i = _format(raw, buf, size) - 1;
+        buf[i] = 45; # 45 == '-'
+    } else {
+        raw := uint64(val);
+        i = _format(raw, buf, size);
+    }
+    return i;
+}
+
+## Formatter base class - got a format() method for anything.
+class Formatter : Object, Writer {
+    
+    Writer rep;
+
+    oper init(Writer rep) : rep = rep {}
+
+    void write(byteptr data) {
+        // StaticString will construct with strlen
+        write(StaticString(data));
+    }
+
+    void write(Buffer data) {
+        rep.write(data);
+    }
+    
+    void format(StaticString data) {
+        write(data);
+    }
+    
+    void format(String data) {
+        write(data);
+    }
+    
+    void format(int32 val) {
+        buffer := ManagedBuffer(11);
+        
+        # have to convert so it will match the later _format method.
+        int64 v = val;
+        start := _format(v, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    void format(uint32 val) {
+        buffer := ManagedBuffer(10);
+        
+        # _format(uint32) comes first so we don't have to type convert
+        start := _format(val, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    void format(int64 val) {
+        buffer := ManagedBuffer(21);
+        start := _format(val, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    void format(uint64 val) {
+        buffer := ManagedBuffer(20);
+        start := _format(val, buffer.buffer, buffer.size);
+        write(Buffer(buffer.buffer + start, buffer.size - start));
+    }
+
+    # this temporarily uses a runtime call, until we implement a float
+    # printer in crack
+    void format(float32 val) {
+        buffer := ManagedBuffer(80);
+        float_str(val, buffer.buffer, buffer.size);
+        write(buffer.buffer);
+    }
+
+    # this temporarily uses a runtime call, until we implement a float
+    # printer in crack
+    void format(float64 val) {
+        buffer := ManagedBuffer(80);
+        float_str(val, buffer.buffer, buffer.size);
+        write(buffer.buffer);
+    }
+
+    void format(bool val) {
+        if (val)
+            write('true');
+        else
+            write('false');
+    }
+    
+    ## For general objects, format() just calls the object's writeTo()
+    ## method.
+    void format(Object obj) {
+        if (obj is null)
+            write('null');
+        else
+            obj.writeTo(this);
+    }
+    
+    ## So we can deal with plain null-terminated strings.
+    void format(byteptr cstr) {
+        write(cstr);
+    }
+
+    Object getWriterObject() { return this; }
+}
+
+cout := Formatter(FDWriter(1));
+cerr := Formatter(FDWriter(2));
+cin := FDReader(0);
+
+## Allows you to construct a string by writing to it.
+class StringWriter : AppendBuffer, Writer {
+
+    oper init(uint initBufSize) : AppendBuffer(initBufSize) {}
+    oper init() : AppendBuffer(1024) {}
+    
+    void write(Buffer data) {
+        extend(data);
+    }
+    
+    ## Return a string containing everything that has been written so far.
+    String createString() {
+        return String(buffer, pos, false);
+    }
+    
+    ## Return a null terminated string containing everything that has been 
+    ## written so far.
+    CString createCString() {
+        append(0);
+        return CString(buffer, pos - 1, false);
+    }
+
+    Object getWriterObject() { return this; }
+};
+
+## Allows you to read from a string.
+class StringReader : Object, Reader {
+    
+    uint __pos;
+    String __src;
+    
+    oper init(String src) : __src = src {}
+    
+    uint read(WriteBuffer buf) {
+        if (__pos >= __src.size)
+            return 0;
+        
+        count := 
+            (__pos + buf.size > __src.size) ? __src.size - __pos : buf.size;
+        buf.move(0, __src.buffer + __pos, count);
+        __pos += count;
+        return count;
+    }
+    
+    Object getReaderObject() { return this; }
+}
+
+## Convenience wrapper, equivalent to Formatter(StringWriter())
+class StringFormatter : Formatter {
+
+    StringWriter _writer = {};
+
+    oper init(uint initBufSize) : Formatter(null), _writer(initBufSize) {
+        rep = _writer;
+    }
+
+    oper init() : Formatter(null) { rep = _writer; }
+
+    ## see: StringWriter.createString()
+    String createString() { return _writer.createString(); }
+
+    ## see: StringWriter.createCString()
+    String createCString() { return _writer.createCString(); }
+};
+
+## Instances of this class let you create a string from IString syntax.  
+## Sample usage:
+##   String v = FStr() `variable x = $x`;
+class FStr : StringFormatter {
+    oper init() {}
+    
+    void enter() {
+        if (!_writer)
+            rep = _writer = StringWriter();
+    }
+
+    String leave() {
+        result := _writer.createString();
+        _writer = null;
+        rep = null;
+        return result;
+    }
+}
