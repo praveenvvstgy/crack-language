@@ -1,0 +1,27 @@
+## tools for writing bindings to native APIs.
+
+import crack.lang die, FreeBase, free;
+
+class Opaque : VTableBase {
+    oper init() {
+        die('attempted to construct opaque class');
+    }
+    
+    bool toBool() { return !(this is null); }
+};
+
+class Wrapper : FreeBase {
+    oper release() { free(this); }
+};
+
+## Equivalent to "int *" in C code
+class IntWrapper : Wrapper {
+    int val;
+    oper init(int val) : val = val {}
+};
+
+## Equivalent to "char **" in C code.
+class ByteptrWrapper : Wrapper {
+    byteptr val;
+    oper init(byteptr val) : val = val {}
+};
