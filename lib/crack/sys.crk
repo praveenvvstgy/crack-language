@@ -1,0 +1,19 @@
+## This module provides access to system internals.
+## Copyright 2010 Google Inc.
+
+import crack.lang IndexError;
+import crack.io FStr;
+import crack.runtime exit;
+import crack.strutil StringArray;
+
+StringArray _createArgv() {
+    v := __getArgv();
+    c := __getArgc();
+    argv := StringArray(uint(c));
+    for (uint i; i < c; ++i)
+        argv.append(StaticString(v[i]));
+    return argv;
+}
+
+## The "argv" variable.
+argv := _createArgv();
