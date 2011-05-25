@@ -8,12 +8,14 @@
 #include "BCleanupFrame.h"
 #include "BFieldRef.h"
 #include "BFuncDef.h"
+#include "BFuncPtr.h"
 #include "BModuleDef.h"
 #include "BResultExpr.h"
 #include "BTypeDef.h"
 #include "Consts.h"
 #include "ExceptionCleanupExpr.h"
 #include "FuncBuilder.h"
+#include "FunctionTypeDef.h"
 #include "Incompletes.h"
 #include "LLVMValueExpr.h"
 #include "Ops.h"
@@ -502,6 +504,7 @@ GlobalVariable *LLVMBuilder::getModVar(model::VarDefImpl *varDefImpl) {
 }
 
 TypeDef *LLVMBuilder::getFuncType(Context &context,
+                                  FuncDef *funcDef,
                                   const llvm::Type *llvmFuncType
                                   ) {
 
@@ -511,19 +514,47 @@ TypeDef *LLVMBuilder::getFuncType(Context &context,
         return TypeDefPtr::rcast(iter->second);
 
     // nope.  create a new type object and store it
-    BTypeDefPtr crkFuncType = new BTypeDef(context.construct->classType.get(),
-                                           "",
-                                           llvmFuncType
-                                           );
-    funcTypes[llvmFuncType] = crkFuncType;
-    
-    // Give it an "oper to voidptr" method.
-    context.addDef(
-        new VoidPtrOpDef(context.construct->voidptrType.get()),
-        crkFuncType.get()
-    );
-    
-    return crkFuncType.get();
+    TypeDefPtr function = context.ns->lookUp("function");
+
+    if ((funcDef->flags & FuncDef::method) || function.get() == 0) {
+        // this is a method, or there is no function in this context
+        BTypeDefPtr crkFuncType = new BTypeDef(context.construct->classType.get(),
+                                               "",
+                                               llvmFuncType
+                                               );
+        funcTypes[llvmFuncType] = crkFuncType;
+
+        // Give it an "oper to voidptr" method.
+        context.addDef(
+                    new VoidPtrOpDef(context.construct->voidptrType.get()),
+                    crkFuncType.get()
+                    );
+
+        return crkFuncType.get();
+    }
+
+    // we have function, specialize based on return and argument types
+    TypeDef::TypeVecObjPtr args = new TypeDef::TypeVecObj();
+
+    // push return
+    args->push_back(funcDef->returnType);
+
+    // now args
+    for (FuncDef::ArgVec::iterator arg = funcDef->args.begin();
+         arg != funcDef->args.end();
+         ++arg
+         ) {
+        args->push_back((*arg)->type.get());
+    }
+
+    TypeDefPtr specFuncType =
+            function->getSpecialization(context, args.get());
+
+    specFuncType->defaultInitializer = new NullConst(specFuncType.get());
+
+    funcTypes[llvmFuncType] = specFuncType;
+    return specFuncType.get();
+
 }
 
 BHeapVarDefImplPtr LLVMBuilder::createLocalVar(BTypeDef *tp, Value *&var,
@@ -567,15 +598,22 @@ LLVMBuilder::LLVMBuilder() :
 
 ResultExprPtr LLVMBuilder::emitFuncCall(Context &context, FuncCall *funcCall) {
 
-    BFuncDef *func = BFuncDefPtr::arcast(funcCall->func);
-
     // get the LLVM arg list from the receiver and the argument expressions
     vector<Value*> valueArgs;
-    
+
+    // either a normal function call or a function pointer call
+    BFuncDef *funcDef = BFuncDefPtr::rcast(funcCall->func);
+    BFuncPtr *funcPtr;
+    if (!funcDef) {
+        funcPtr = BFuncPtrPtr::rcast(funcCall->func);
+        assert(funcPtr && "no funcDef or funcPtr");
+    }
+
     // if there's a receiver, use it as the first argument.
     Value *receiver;
-    BFuncDef *funcDef = BFuncDefPtr::arcast(funcCall->func);
-    if (funcCall->receiver) {
+
+    if (funcCall->receiver) {        
+        assert(funcDef && "funcPtr instead of funcDef");
         funcCall->receiver->emit(context)->handleTransient(context);
         narrow(funcCall->receiver->type.get(), funcDef->getReceiverType());
         receiver = lastValue;
@@ -601,16 +639,21 @@ ResultExprPtr LLVMBuilder::emitFuncCall(Context &context, FuncCall *funcCall) {
     BasicBlock *followingBlock = 0, *cleanupBlock;
     getInvokeBlocks(context, followingBlock, cleanupBlock);
 
-    if (funcCall->virtualized)
+    if (funcCall->virtualized) {
+        assert(funcDef && "funcPtr instead of funcDef");
         lastValue = IncompleteVirtualFunc::emitCall(context, funcDef, 
                                                     receiver,
                                                     valueArgs,
                                                     followingBlock,
                                                     cleanupBlock
                                                     );
+    }
     else {
+        // for a normal funcdef, get the Function*
+        // for a function pointer, we invoke the pointer directly
+        Value *callee = (funcDef) ? funcDef->getRep(*this) : funcPtr->rep;
         lastValue =
-            builder.CreateInvoke(funcDef->getRep(*this), followingBlock, 
+            builder.CreateInvoke(callee, followingBlock,
                                  cleanupBlock,
                                  valueArgs.begin(), 
                                  valueArgs.end()
@@ -2203,6 +2246,15 @@ ModuleDefPtr LLVMBuilder::registerPrimFuncs(model::Context &context) {
                                             0
                                             );
     context.addDef(arrayType.get());
+
+    // create the raw function type
+    // "oper call" methods are added as this type is specialized during parse
+    TypeDefPtr functionType = new FunctionTypeDef(
+                                            context.construct->classType.get(),
+                                            "function",
+                                            0
+                                            );
+    context.addDef(functionType.get());
 
     // now that we have byteptr and array and all of the integer types, we can
     // initialize the body of Class.
