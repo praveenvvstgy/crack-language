@@ -1,0 +1,230 @@
+# Copyright 2010 Google Inc.
+
+import crack.lang Buffer, Exception, FreeBase, InvalidStateError, 
+    NotImplementedError, WriteBuffer;
+import crack.io FStr, Reader, Writer, Formatter, cout;
+import crack.exp.error strerror;
+import crack.container Array;
+import crack.exp.bindings Opaque;
+import crack.time TimeDelta;
+import crack.runtime connect, Constants, makeIPV4, setsockopt,
+    accept, bind, free, PollEvt, PollSet, SigSet, SockAddr, SockAddrIn, 
+    TimeVal, close, listen, send, socket, recv;
+
+sockconsts := Constants();
+
+## interface for all classes that can be polled.
+class Pollable {
+    int getFD() { throw NotImplementedError('Pollable.getFD() not defined.'); }
+}
+
+class PollEvent : Object, PollEvt {
+    Pollable pollable;
+}
+
+## base class for all kinds of socket addresses.
+class Address {
+    SockAddr _addr;
+
+    oper init(SockAddr addr) : _addr = addr {}
+    oper del() { free(_addr); }
+    
+    Address create() {
+        throw NotImplementedError('Address.create() not defined');
+    }
+}
+
+## IPv4 address.
+class InetAddress : Address {
+
+    oper init(byte a, byte b, byte c, byte d, int port) : 
+        Address(SockAddrIn(a, b, c, d, port)) {
+    }
+
+    oper init(uint32 addr, uint port) :
+        Address(SockAddrIn(addr, port)) {
+    }
+    
+    Address create() {
+        i := SockAddrIn.unsafeCast(_addr);
+        return InetAddress(i.addr, i.port);
+    }
+}
+
+## Wrapper around a socket.
+class Socket : Pollable, Reader, Writer {
+    int fd;
+    
+    # the address the socket is bound to.
+    Address __bound;
+
+    oper init(int domain, int type, int protocol) : 
+        fd = socket(domain, type, protocol) {
+    }
+    
+    oper init(int fd) : fd = fd {}
+
+    int getFD() { return fd; }
+
+    void close() {
+        close(fd);
+        fd = -1;
+    }
+        
+    oper del() {
+        if (fd != -1)
+            close();
+    }
+    
+    ## Connect to the address.  Returns true on success, false on failure.
+    bool connect(Address addr) {
+        return connect(fd, addr._addr) == 0;
+    }
+
+    ## Bind to the address.  Returns true on success, false on failure.    
+    bool bind(Address addr) {
+        if (bind(fd, addr._addr) == 0) {
+            __bound = addr;
+            return true;
+        } else {
+            return false;
+        }
+    }
+    
+    bool listen(int backlog) {
+        return listen(fd, backlog) == 0;
+    }
+    
+    bool setReuseAddr(bool val) {
+        return setsockopt(fd, sockconsts.SOL_SOCKET, sockconsts.SO_REUSEADDR, 
+                          1
+                          ) == 0;
+    }
+    
+    int send(Buffer data, int flags) {
+        return send(fd, data.buffer, data.size, flags);
+    }
+
+    int recv(WriteBuffer buf, int flags) {
+        return recv(fd, buf.buffer, buf.size, flags);
+    }
+
+    class Accepted {
+        Socket sock;
+        Address addr;
+    
+        oper init(Socket sock, Address addr) :
+            sock = sock,
+            addr = addr {
+        }
+    }
+    
+    ## Returns null if there was an error, errno should contain the error.
+    Accepted accept() {
+        if (!__bound)
+            throw InvalidStateError("Attempting accept on socket that hasn't "
+                                     'been \"bind()ed"'
+                                    );
+        Address addr = __bound.create();
+        rc := accept(fd, addr._addr);
+        if (rc == -1)
+            return null;
+        return Accepted(Socket(rc), addr);
+    }
+    
+    void writeTo(Writer out) {
+        Formatter(out) `Socket(fd: $fd)`;
+    }
+    
+    # Reader interface
+    uint read(WriteBuffer buffer) {
+        rc := recv(buffer, 0);
+        if (rc < 0)
+            throw Exception(FStr() `Error writing to socket: $(strerror())`);
+        return uint(rc);
+    }
+    
+    Object getReaderObject() { return this; }
+    
+    # Writer interface
+    void write(Buffer data) {
+        rc := send(data, 0);
+        if (rc < 0)
+            throw Exception(FStr() `Error writing to socket: $(strerror())`);
+        if (rc != data.size)
+            throw Exception('Incomplete write to socket');
+    }
+
+    Object getWriterObject() { return this; }
+}
+        
+## A poller is a collection of Pollables that you can use to wait for an event
+## on any of the pollables and then iterate over the set of events that 
+## occurred.
+class Poller {
+    Array __pollables;
+    PollSet __fds;
+    uint __nextIndex;
+    uint __capacity;
+    int __iter;
+    
+    oper init() : 
+        __pollables(256),
+        __fds = PollSet(256),
+        __capacity = 256 {
+    }
+    
+    void grow(uint newCapacity) {
+        if (newCapacity < __capacity)
+            throw Exception('cannot shrink');
+        
+        __pollables.realloc(newCapacity);
+        
+        # create a new pollset and copy the existing one.
+        newFDs := PollSet(newCapacity);
+        newFDs.copy(__fds, __capacity);
+
+        __capacity = newCapacity;
+    }
+
+    void add(Pollable p, int events) {
+        
+        # grow if there's not enough space
+        if (__nextIndex == __capacity) grow(__capacity * 2);
+        
+        # add it to the pollables and to the fds.
+        __pollables.append(p);
+        __fds.set(__nextIndex, p.getFD(), events, 0);
+        
+        ++__nextIndex;
+    }
+
+    ## Wait for up to timeout or until the next event.  'timeout' may be null, 
+    ## in which case we wait indefinitely.
+    ## Calling wait() resets the internal iterator - the next call to nx() 
+    ## will return the first available event.
+    ## Returns the number of sockets selected, -1 if there was an error.  0 if 
+    ## there was a timeout.
+    int wait(TimeDelta timeout) {
+        __iter = 0;
+        return __fds.poll(__nextIndex, 
+                          timeout ? TimeVal(timeout.secs, timeout.nsecs) : null,
+                          null
+                          );
+    }
+    
+    PollEvent nx() {
+        if (__iter == -1)
+            return null;
+
+        PollEvent result = {};
+        __iter = __fds.next(__nextIndex, uint(__iter), result);
+
+        if (__iter == -1)
+            return null;
+
+        # store the pollable in the result and return it.
+        result.pollable = Pollable.cast(__pollables[uint(__iter++)]);
+        return result;   
+    }
+}
