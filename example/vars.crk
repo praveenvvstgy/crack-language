@@ -1,0 +1,12 @@
+// variable definitions
+// Copyright 2009 Google Inc.
+byteptr str;
+byteptr prettyString = 'a pretty string';
+int32 val = 100;
+
+puts('empty brackets: [');
+puts(str);
+puts(']\n');
+puts('pretty string: [');
+puts(prettyString);
+puts(']\n');
