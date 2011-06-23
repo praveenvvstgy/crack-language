@@ -1,0 +1,57 @@
+# Copyright 2003 Michael A. Muller
+# Portions Copyright 2010 Google Inc
+
+AC_INIT(crack, 0.4)
+AM_INIT_AUTOMAKE(crack, 0.4)
+AC_CONFIG_SRCDIR([parser/Token.h])
+AC_CONFIG_MACRO_DIR([m4])
+
+# include cppunit
+#AM_PATH_CPPUNIT(1.12.0)
+
+# required for C++ programs...
+AC_PROG_CXX
+
+# Checks for typedefs, structures, and compiler characteristics.
+AC_HEADER_STDBOOL
+AC_C_CONST
+
+# automake advised me to add this...
+AC_CONFIG_FILES([Makefile])
+# config.h is here to prevent autoheader from clobbering ext/crack_config.h.in
+AC_CONFIG_HEADERS([config.h ext/crack_config.h])
+
+# ... and also this (when I switched to a library)
+AC_PROG_RANLIB
+
+# for my shared libs
+AC_PROG_LIBTOOL
+LT_INIT(dlopen)
+
+# external packages that we need
+AM_PATH_LLVM
+
+# determine if we're 64 bit.
+AC_CHECK_SIZEOF([void *])
+
+# optional libraries
+
+AM_PATH_CWD
+AM_CONDITIONAL(HAVE_CWD, [test "x$got_cwd" = xyes])
+
+AM_PATH_GTK_2_0(2.0.0, [got_gtk=yes])
+AM_CONDITIONAL(HAVE_GTK, [test "x$got_gtk" = xyes])
+
+AX_PATH_LIB_PCRE(got_pcre=yes)
+AM_CONDITIONAL(HAVE_PCRE, [test "x$got_pcre" = xyes])
+
+AM_PATH_SDL(1.2.14, [got_sdl=yes])
+AM_CONDITIONAL(HAVE_SDL, [test "x$got_sdl" = xyes])
+
+AM_PATH_GL
+AM_CONDITIONAL(HAVE_GL, [test "x$got_gl" = xyes])
+
+AM_PATH_CAIRO
+AM_CONDITIONAL(HAVE_CAIRO, [test "x$got_cairo" = xyes])
+
+AC_OUTPUT
