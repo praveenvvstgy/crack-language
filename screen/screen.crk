@@ -1,0 +1,403 @@
+// A test suite for crack
+// Copyright 2010-2011 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.io cout, cerr, Formatter, Writer, StringWriter, StringFormatter, FStr;
+import crack.sys argv, exit;
+import crack.exp.dir Directory;
+import crack.exp.file File, FileInfo;
+import crack.exp.regex Regex;
+import crack.exp.process Process;
+import crack.exp.cmdline CmdOptions, Option, CMD_STR, CMD_INT, CMD_BOOL;
+import crack.cont.hashmap HashMap;
+import crack.cont.list List;
+
+// XXX 
+import crack.container Iterator;
+
+SCREEN_VERSION := ".5";
+
+class Config {
+    String crackBin, rootDir, outDir, libPath;  
+    bool verbose, showDiff;
+}
+Config config = {};
+
+class Result {
+    bool pass;
+    String expected, actual;
+
+    oper init(bool t): pass = t { }
+    oper init(String e, String a): pass = false, expected = e, actual = a { 
+        
+    }
+    
+}
+
+class Test {
+
+    FileInfo _fInfo;
+    String _desc;
+    HashMap[String, String] _testData = {};
+    
+    String _isSkipped;
+
+    oper init(): _desc("Unknown") { }
+
+    void loadTemplate() {
+        
+        f := File(_fInfo.name, "r");
+        if (!f.isValid()) {
+            cout `file: $(_fInfo.name) could not be opened!\n`;
+            _isSkipped = "unable to open";
+            return;
+        }
+        
+        // parse out sections
+        String lineBuf, curSection;
+        StringWriter dataBuf = {};
+        headerPat := Regex('^--(\\w+)--$');
+        while (lineBuf = f.nextLine()) {
+            // look for section change
+            m := headerPat.search(lineBuf);
+            if (m) {
+                if (curSection)
+                    _testData[curSection] = dataBuf.createString();
+                curSection = m.group(1);
+                //cerr `debug: switching to group $curSection\n`;
+                dataBuf = StringWriter();
+            }
+            else {
+                // add line to current section
+                dataBuf.write(lineBuf);
+                if (curSection == 'TEST')
+                    _desc = String(lineBuf, 0, lineBuf.size-1);
+            }
+        }
+        if (curSection)
+            _testData[curSection] = dataBuf.createString();
+
+    }
+
+    /// ensure test has required sections and that they contain valid data
+    /// also check to see if we're skipping this test for some reason
+    void checkTemplate() {        
+        if (!_testData["FILE"]) {
+            _isSkipped = "the template was missing a FILE section";
+        }
+    }
+
+    String writeScript(Directory outDir) {
+        
+        outName := outDir.nameWithTrailing()+_fInfo.basename(true) + ".crk";
+        
+        //cout `writing: $outName\n`;
+        
+        out := File(outName,"w");        
+        out.write(String.cast(_testData["FILE"]));
+
+        return outName;
+        
+    }
+
+    String _colorMsg(String c, String msg) {
+        sw := StringFormatter(128);        
+        sw `\033[$(c);1m$(msg)\033[0m`;
+        return sw.createString();
+    }
+    String _pass() {
+        return _colorMsg("32", "PASS");
+    }
+    String _fail() {
+        return _colorMsg("31", "FAIL");
+    }
+
+    Result compareOutput(String expected, String actual) {
+
+        if (expected == actual) {            
+            cout `$(_pass())`;
+            return Result(true);
+        }
+        else {
+            cout `$(_fail())`;            
+            return Result(expected, actual);
+        }
+        
+    }
+
+    Result execCrackWithBuilder(String builder, String nick, 
+                                Directory outDir, bool nativeRun) {
+        
+        testScript := writeScript(outDir);
+        String testBinary;
+        
+        String args = {};
+        if (_testData["ARGS"]) {
+            args = String.cast(_testData["ARGS"]).rtrim();            
+        }
+
+        if (nativeRun) {
+            // we need to output a binary, then run it after for the final results
+            testBinary = outDir.nameWithTrailing()+_fInfo.basename(true);
+            args = args+" -b out="+testBinary;
+        }
+
+        // XXX template argv section
+        cmd := config.crackBin+" -G -B "+builder+" "+args+" "+testScript;
+        if (config.libPath)
+            cmd = cmd + " -l " + config.libPath;
+        if (config.verbose)
+            cout `(running: $cmd])\n`;
+
+        cout `$nick: `;
+        if (nativeRun)
+            cout `(Compile: `;
+        
+        // XXX stdin
+        p := Process(cmd);
+        p.wait();
+        compileOut := p.getStdOut();
+        compileErr := p.getStdErr();
+
+        if (p.getReturnCode() != 0) {
+            // compile failed
+            cout `$(_fail()) `;
+            cout `[$(p.getReturnCode())]\n$compileErr`;
+            return Result(false);
+        }
+        else if (nativeRun) {
+            cout `$(_pass()) `;
+        }
+
+        if (!_testData["EXPECT"]) {
+           cout `no valid EXPECT section\n`;
+           return Result(false);
+        }
+
+        expect := String.cast(_testData["EXPECT"]);
+        Result r;
+        if (nativeRun) {
+            // native: run binary to get final results for comparison
+            bfi := FileInfo(testBinary);
+            if (!bfi.exists()) {
+                cout `$nick: `;
+                _fail();
+                cout `: binary ($testBinary) wasn't created, check compile output\n`;
+                return Result(false);
+            }
+            // XXX binary args (script argv)
+            if (config.verbose)
+                cout `(running: $testBinary)\n`;
+            cout `Run: `;
+            b := Process(testBinary);
+            b.wait();
+            if (b.failed()) {
+                cout `$(_fail())`;
+                cout `: binary failed to run\n`;
+            }
+            else {
+                nativeOut := b.getStdOut();
+                nativeErr := b.getStdErr();
+                r = compareOutput(expect, nativeOut);
+                // XXX err output EXPECTERR ?
+            }
+            cout `) `;
+        }
+        else {
+            // JIT, interpreted, etc
+            r = compareOutput(expect, compileOut);
+            cout `  `;
+            // XXX err output EXPECTERR ?
+        }
+        return r;
+        
+    }
+
+    void run(Directory outDir) {
+        
+        if (_isSkipped) {
+            cout `[$_fInfo]: $_isSkipped\n`;
+            return;
+        }
+        
+        cout `[$_fInfo]: $_desc\n`;
+
+        HashMap[String, Result] results = {};
+        results["JIT"] = execCrackWithBuilder("llvm-jit", "JIT", outDir, false);
+        results["Native"] = execCrackWithBuilder("llvm-native", "Native", outDir, true);
+        cout `\n`;
+        
+        for (r :in results) {
+            if (!r.val.pass && (config.verbose || config.showDiff) && r.val.actual && r.val.expected) {
+                cout `----$(r.key) Fail----\nExpected: [$(r.val.expected)] Actual: [$(r.val.actual)]\n------------\n`;
+            }
+        }
+        
+
+    }
+
+    oper init(FileInfo info): _fInfo = info,
+                              _desc("Unknown") {
+        loadTemplate();
+        checkTemplate();
+    }
+
+    void _dump(Writer out) {
+        for (t :in _testData)
+            Formatter(out) `[$(t.key)]:\n$(t.val)`;
+    }
+
+    void writeTo(Writer out) {
+        Formatter(out) `[$_fInfo]: $_desc\n`;
+        //_dump(out);
+    }
+
+}
+
+class TestSuite {
+
+    List[Test] _testList = {};
+    CmdOptions _options = {};
+    
+    void usage() {
+        _options.printUsage(FStr() `Usage: $(argv[0]) <crack binary> <test dir> <output dir>\n`);
+        exit(1);
+    }
+    
+    void scanForTests(Directory dir) {
+    
+        if (!dir.isValid()) {
+            cerr `skipping invalid directory: $dir\n`;
+            return;
+        }
+        
+        cout `importing tests from $dir ... `;
+
+        cnt := 0;
+        FileInfo curFile;
+        i := dir.fileInfoIter();
+        while (i.nx()) {
+            curFile = FileInfo.cast(i.elem());
+            if (curFile.matches("*.crkt")) {
+                cnt++;
+                _testList.append(Test(curFile));
+            }
+        }
+/*        
+        // gather test files
+        for (curFile :in dir.files()) {
+            if (curFile.matches("*.crkt")) {
+                cnt++;
+                _testList.append(Test(curFile));
+            }
+        }
+*/
+        cout `found $cnt\n`;
+        
+        Directory nextDir;
+        i = dir.dirIter();
+        while (i.nx()) {
+            nextDir = Directory.cast(i.elem());
+            scanForTests(nextDir);
+        }
+/*
+        // recurse to directories
+        for (nextDir :in dir.dirs()) {
+            scanForTests(nextDir);
+        }
+        */
+    }
+
+    void runTests(Directory dir) {
+
+        if (!dir.isValid()) {
+            cerr `invalid output directory: $dir\n`;
+            return;
+        }
+        
+        cout `running tests with output in $dir...\n`;
+
+        for (curTest :in _testList) {
+            curTest.run(dir);
+        }
+
+    }
+
+    oper init() {
+        
+
+        _options.add("help", "h", "Show usage", "f", CMD_BOOL);
+        _options.add("verbose", "h", "Show verbose output", "f", CMD_BOOL);
+        _options.add("crackbin", "c", "Crack binary", "", CMD_STR);
+        _options.add("testdir", "t", "Directory to search recursively for tests", "./tests", CMD_STR);
+        _options.add("testfile", "f", "Single test template to execute", "", CMD_STR);
+        _options.add("outdir", "o", "Directory to create output files", "./output", CMD_STR);
+        _options.add("libpath", "l", "Add path to crack library path during test. May be colon seperated list.", "", CMD_STR);
+        _options.parse(argv);
+        
+        cout `screen v$(SCREEN_VERSION)\n`;
+        
+        if (_options.getBool("help"))
+            usage();
+        
+        config.crackBin = _options.getString("crackbin");
+        if (config.crackBin == "")
+            usage();
+        
+        config.rootDir = _options.getString("testdir");
+        config.outDir = _options.getString("outdir");
+        config.libPath = _options.getString("libpath");
+        config.verbose = _options.getBool("verbose");
+        config.showDiff = false;
+        
+        testFile := _options.getString("testfile");        
+        if (testFile != "" && config.rootDir != "") {
+            // if specific file, clear directory
+            config.rootDir = null;
+            fi := FileInfo(testFile);
+            if (!fi.exists()) {
+                cerr `$testFile does not exist\n`;
+                exit(1);
+            }
+            test := Test(fi);
+            _testList.append(test);
+            config.showDiff = true;
+        }
+        
+        // check binary
+        cfi := FileInfo(config.crackBin);
+        if (!cfi.exists()) {
+            cout `crack binary [$(config.crackBin)] not found\n`;
+            exit(1);            
+        }
+        
+        p := Process(config.crackBin+" --version");
+        p.wait();
+        String out = {};
+        if (!p.failed())
+            out = p.getStdOut();        
+        if (p.failed() || p.getReturnCode() != 0) {
+            cout `crack binary [$(config.crackBin)] failed to run, or unexpected result\n`;
+            exit(1);
+        }
+        else if (out.size < 5 || out.slice(0,5) != "crack") {
+            cout `crack binary [$(config.crackBin)] invalid version response: $(out.slice(0,5))\n`;
+            exit(1);
+        }
+        else {
+            cout `using binary: $out\n`;
+        }
+        
+    }
+    
+    void run() {
+        
+        if (config.rootDir)
+            scanForTests(Directory(config.rootDir));
+        runTests(Directory(config.outDir, false));
+        
+    }
+
+}
+
+suite := TestSuite();
+suite.run();
