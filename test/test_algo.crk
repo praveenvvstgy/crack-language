@@ -1,0 +1,76 @@
+// test algorithms
+// Copyright 2010-2011 Shannon Weyrick <weyrick@mozek.us>
+
+import crack.exp.algorithm QuickSort, QuickSortPrim, InsertionSort, 
+    InsertionSortPrim;
+import crack.cont.array Array;
+import crack.io cout, FStr;
+import crack.runtime random;
+
+Array[uint] newRandomArray(uint n) {
+    a := Array[uint](n);
+    for (i := 0; i < n; ++i)
+        a.append(random());
+    return a;
+}
+
+class CheckerPrim[SeqT] {
+    @static void check(SeqT a, uintz count) {
+        typeof(a[0]) last;
+        for (i := 0; i < count; ++i) {
+            if (last > a[i])
+                cout `fail: $i, $(a[i]) < $last\n`;
+            last = a[i];
+        }
+    }
+}
+
+
+class Checker[SeqT] {
+    @static void check(SeqT a) {
+        typeof(a[0]) last;
+        for (i := 0; i < a.count(); ++i) {
+            if (last > a[i])
+                cout `fail: $i, $(a[i]) < $last\n`;
+            last = a[i];
+        }
+    }
+}
+
+
+////////////////////////////////
+
+uint nsize = 500;
+
+// QUICKSORT
+a := newRandomArray(nsize);
+QuickSort[Array[uint]].sort(a);
+Checker[Array[uint]].check(a);
+
+// INSERTION SORT
+c := newRandomArray(nsize);
+// XXX this syntax will change once some parser issues have been fixed
+InsertionSort[Array[uint]].sort(c);
+Checker[Array[uint]].check(c);
+
+// In place sort
+b := newRandomArray(nsize);
+b.sort();
+Checker[Array[uint]].check(b);
+
+sA := Array[String]!['some', 'string', 'on', 'crack'];
+sA.sort();
+FStr sWriter = {};
+stringRepr := FStr() `$sA`;
+if (stringRepr != '[crack, on, some, string]')
+   cout `String Array sort/writeTo method failed\n`;
+
+sA2 := array[int]![0, 3, 2, 1];
+InsertionSortPrim[array[int]].sort(sA2, 4);
+CheckerPrim[array[int]].check(sA2, 4);
+
+sI2 := array[uint]![3, 2, 1, 0];
+QuickSortPrim[array[uint]].sort(sI2, 4);
+CheckerPrim[array[uint]].check(sI2, 4);
+
+cout `ok\n`;
