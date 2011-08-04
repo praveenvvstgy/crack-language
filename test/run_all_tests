@@ -701,9 +701,10 @@ test_output cmdline_args 'command line arguments' \
      while (i < argc) { puts(argv[i]); i = i + 1; }' \
     'a
 b
-c' \
+c
+-d' \
     '' \
-    'a b c'
+    'a b c -d'
 
 test_output specialized_comparisons 'specialization comparisons' \
     'array[byteptr] b = array[byteptr](10); puts("ok")' \
@@ -999,6 +1000,24 @@ test_output protected_across_generics \
      'in f
 in g
 in h'
+
+test_output var_defs_in_cond \
+    'defining variables in condtional expressions' \
+    'x := 10;
+     while (v := x) {
+         printint(v);
+         --x;
+     }
+     if (v := 10) {
+         printint(v);
+     }
+     v := "test";' \
+    '1098765432110'
+
+test_output redefining_methods \
+    'redefinition of methods' \
+    'class A { void f() { f := 100; } }; puts("ok");' \
+    ok
 
 # switch to full bootstrapping mode now that importing works
 testNum=0
@@ -1409,6 +1428,19 @@ test_output second_order_imports \
     'import test.testmod6 public;' \
     "${parseError}1: Name public does not belong to module test.testmod6.  \
 Second-order imports are not allowed.  Import it from test.testmod5 instead."
+
+test_output array_assignment_result \
+    'result of array assignment expressions is the value assigned.' \
+    'import crack.io cout;
+     class A {}
+     A a = {};
+     array[A] aa = {1};
+     Object x;
+     x = (aa[0] = a);
+     if (!(x is a))
+         cout `failed assignment of result of array output assignment\n`;
+     cout `ok\n`;' \
+     ok
 
 test_output x 'serial module' 'import test.test_serial;' ok
 
