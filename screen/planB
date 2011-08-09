@@ -1,0 +1,145 @@
+#!/bin/bash
+# Copyright 2009-2011 Google Inc., Shannon Weyrick <weyrick@mozek.us>
+
+MYDIR=`dirname $0`
+(cd $MYDIR; cd ..; ROOT=`pwd`)
+OUTDIR="$MYDIR/output/"
+echo "output to $OUTDIR"
+
+CRACKBIN="$MYDIR/../crack"
+if [ -s $CRACKBIN ]
+then
+    echo "crack binary at $CRACKBIN"
+else
+    echo "no crack binary found at $CRACKBIN. run from screen/ directory."
+    exit 1
+fi
+
+function extract_section {
+    local file="$1"
+    local sec="$2"
+    local filelen=`wc -l $file | awk '{ print \$1'}`
+    local result
+    #echo "file len: $filelen" >&2
+    cmd="grep -n --color=never %%$sec%% $file"
+    start=`$cmd  | awk -F : '{print \$1}'`
+    #echo "start of $sec: $start"  >&2
+    start_plus_one=`expr $start + 1`
+    cmd1="tail -n +$start_plus_one $file"
+    cmd2="egrep -n -m 1 --color=never %%.+%%"
+    next=`$cmd1 | $cmd2 | awk -F : '{print \$2}'`
+    if [ -n "$next" ]; then  
+        # there is a following section
+        #echo "next section following $sec: $next"  >&2
+        cmd="grep -n --color=never $next $file"
+        end=`$cmd  | awk -F : '{print \$1}'`
+        #echo "which is located at $end"  >&2
+        seclen=`expr $end - $start_plus_one`
+        #echo "section length: $seclen"  >&2
+        seclen_minus_one=`expr $seclen - 1`
+        result=`tail -n +$start_plus_one $file | head -n $seclen`
+        #echo "got: $result" >&2
+    else
+       # no following section, i.e. EOF
+        #echo "no following section" >&2
+        end=$filelen
+        seclen=`expr $end - $start`
+        result=`tail -n +$start_plus_one $file`
+    fi
+    
+    echo "$result"
+}
+
+function load_options {
+    local path="$1"
+    
+    # stop when we get to the top
+    if [ "$path" = "/" -o "$(basename $path)" = "screen" ]; then
+        return
+    fi
+    
+    opt_file="$path/options"
+    if [ -e "$opt_file" ]; then
+        OPTS_sec="$(extract_section "$opt_file" OPTS)"
+    fi
+    
+    # check parent directory
+    load_options "$(dirname $path)"
+}
+
+function run_test {
+
+    local file="$1"
+    
+    # fill the global vars from the options files
+    load_options $(cd "$(dirname "$file")"; pwd)
+    #echo "infile: $file"
+    newname=`basename $file .crkt`
+    outfile="$OUTDIR$newname.crk"
+    #echo "outfile: $outfile"
+    
+    TEST_sec=$(extract_section $file TEST)
+    echo -n "$TEST_sec ..."
+    FILE_sec=$(extract_section $file FILE)
+    echo "$FILE_sec" > $outfile
+    ARGS_sec=$(extract_section $file ARGS)    
+    EXPECT_sec=`extract_section $file EXPECT | sed "s:%OUTDIR%:$OUTDIR:g"`
+    STDIN_sec=`extract_section $file STDIN`
+    
+    # XXX script args
+    # XXX stdin
+
+    if $debug; then
+        gdb_opts="gdb.options.$$"
+        echo "set args $OPTS_sec $outfile $ARGS_sec" >$gdb_opts
+        LD_LIBRARY_PATH=.libs gdb -x $gdb_opts .libs/crack
+        rm "$gdb_opts"
+    else
+        cmdline="$CRACKBIN $OPTS_sec $outfile $ARGS_sec" # xxx script args section
+        #echo "running $cmdline"
+        result="$(echo $STDIN_sec | $cmdline 2>&1)"
+        if [ "$result" = "$EXPECT_sec" ]; then
+            echo ok
+        else
+            echo ""
+            echo "FAILED $file"
+            echo "$cmdline"
+            echo "Expected: $EXPECT_sec"
+            echo "Got     : $result"
+            errors=$((errors + 1))
+        fi
+    fi
+}
+
+debug=false
+if [ "$1" = '-g' ]; then
+    debug=true
+    shift
+fi
+
+errors=0
+if [ -z "$*" ]; then
+    # pre bootstrap tests
+    BASIC=`find $MYDIR/tests/basic -name "*.crkt" | sort`
+    
+    for file in $BASIC
+    do
+        run_test $file
+    done
+else
+    # deal with user-specified tests
+    for test in "$@"; do
+        run_test "$test"
+    done
+fi
+
+if [ "$errors" != 0 ]; then
+    echo "====================="
+    echo "Test Failures: $errors"
+    echo "====================="
+    exit 1
+else
+    echo "=============="
+    echo "All Tests Pass"
+    echo "=============="
+fi
