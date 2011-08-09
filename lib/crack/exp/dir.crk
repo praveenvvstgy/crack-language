@@ -1,0 +1,103 @@
+// Classes for directory traversal
+// Copyright 2010 Shannon Weyrick <weyrick@mozek.us>
+// Portions Copyright 2010 Google Inc.
+
+import crack.io cerr, Formatter, Writer;
+import crack.lang die, FreeBase, CString, SubString;
+import crack.exp.bindings Opaque;
+import crack.cont.list List;
+import crack.exp.file Openable, FileInfo;
+
+import crack.runtime opendir, closedir, readdir, getDirEntry, Dir, DirEntry;
+
+// must match Dir.h defines
+int __CRACK_DTYPE_DIR   = 1;
+int __CRACK_DTYPE_FILE  = 2;
+int __CRACK_DTYPE_OTHER = 3;
+
+byte PATH_SEPARATOR = b"/";
+
+class Directory : Object, Openable {
+
+    String name;
+
+    Dir _dir;
+
+    List[Directory] _dirList = {};
+    List[FileInfo] _fileList = {};
+
+    oper init(String name, bool open): name(name) {
+        // possibly strip trailing delim
+        if (name.rfind(PATH_SEPARATOR) == (name.size-1))
+            name = SubString(name, 0, name.size-1);
+        if (open)
+            _open();
+    }
+
+    oper init(String name): name(name) {
+        // possibly strip trailing delim
+        if (name.rfind(PATH_SEPARATOR) == (name.size-1))
+            name = SubString(name, 0, name.size-1);
+        // default open
+        _open();
+    }
+
+    void _open() {
+
+        cn := CString(name);
+        _dir = opendir(cn.buffer);
+        _isValid = !(_dir is null);
+        _isOpened = true;
+
+        if (!_isValid)
+            return;
+
+        DirEntry d = getDirEntry(_dir);
+        StaticString n;
+        while (readdir(_dir)) {
+            if (d.type == __CRACK_DTYPE_DIR) {
+                n = StaticString(d.name);
+                if (n != '.' && n != '..')
+                    _dirList.append(Directory(name+PATH_SEPARATOR+n));
+            }
+            else {
+                _fileList.append(FileInfo(name+PATH_SEPARATOR+d.name));
+            }
+        }
+
+    }
+
+    oper del() {
+        if (_isValid)
+            closedir(_dir);
+    }
+
+    String nameWithTrailing() {
+        return name+PATH_SEPARATOR;
+    }
+
+    /// Returns an iterator over the subdirectories (Iter[Directory]).
+    List[Directory] dirs() { 
+        if (!_isOpened)
+            _open();
+        if (_isValid)
+            return _dirList; 
+        else
+            return null;
+    }
+
+    List[FileInfo] files() {
+        if (!_isOpened)
+            _open();
+        if (_isValid)
+            return _fileList; 
+        else
+            return null;        
+    }
+    
+    void writeTo(Writer out) {
+        Formatter(out) `$name`;
+    }
+    
+}
+
