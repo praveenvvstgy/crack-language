@@ -295,7 +295,7 @@ void init(Module *mod) {
 
     Type *opaqCallbackType = mod->addType("Callback", 0);
     opaqCallbackType->finish();
-
+    
     Type *annotationType = mod->addType("Annotation", sizeof(Annotation));
     annotationType->addMethod(mod->getVoidptrType(), "getUserData",
                               (void *)Annotation::_getUserData
@@ -331,11 +331,20 @@ void init(Module *mod) {
                   (void *)CrackContext::_getUserData
                   );
 
+    // need forward declared types here.
+    Type *annFuncType = mod->getVoidptrType();;
+    {
+        vector<Type *> params(2);
+        params[0] = mod->getVoidType();
+        params[1] = cc;
+        annFuncType = mod->getType("function")->getSpecialization(params);
+    }
+
     typedef void (*G1)(CrackContext *, const char *, void (*)(CrackContext *));
     G1 g1 = CrackContext::_storeAnnotation;
     f = cc->addMethod(mod->getVoidType(), "storeAnnotation", (void *)g1);
     f->addArg(mod->getByteptrType(), "name");
-    f->addArg(mod->getVoidptrType(), "func");
+    f->addArg(annFuncType, "func");
 
     typedef void (*G2)(CrackContext *, const char *, void (*)(CrackContext *),
                        void *
@@ -343,7 +352,7 @@ void init(Module *mod) {
     G2 g2 = CrackContext::_storeAnnotation;
     f = cc->addMethod(mod->getVoidType(), "storeAnnotation", (void *)g2);
     f->addArg(mod->getByteptrType(), "name");
-    f->addArg(mod->getVoidptrType(), "func");
+    f->addArg(annFuncType, "func");
     f->addArg(mod->getVoidptrType(), "userData");
 
     // error/warning functions
