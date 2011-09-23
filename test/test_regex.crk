@@ -1,0 +1,63 @@
+
+import crack.lang die;
+import crack.io cout, Writer;
+import crack.exp.regex escape, Regex, Match;
+
+rx := Regex('simple');
+m := rx.search('not simple');
+if (m.begin() != 4) die('begin failed');
+if (m.end() != 10) die('end failed');
+if (m.group() != 'simple') die('group failed');
+
+rx = Regex('blah{(.*)}');
+m = rx.search('this is blah{foo}');
+if (!m || m.group(1) != 'foo') die('group(1) failed');
+if (m.begin(1) != 13) die('begin(1) failed');
+if (m.end(1) != 16) die('end(1) failed');
+
+rx = Regex('^blah{(?P<stuff>.*)}');
+m = rx.search('blah{foo}');
+if (!m || m.group('stuff') != 'foo')
+    die('named groups failed');
+if (m.begin('stuff') != 5) die('begin(stuff) failed');
+if (m.end('stuff') != 8) die('end(stuff) failed');
+
+if (1) {
+    expected := '\\.\\?\\+\\*\\[\\\\\\{\\^\\$\\(';
+    actual := escape('.?+*[\\{^$(');
+    if (actual != expected)
+        cout `FAILED regex escaping: got $actual, expected $expected\n`;
+} 
+
+if (1) {
+    
+    void replacer(Match match, Writer out) {
+        if (match.group() != 'pat')
+            cout `FAILED match value during replacement.\n`;
+        out.write('foo');
+    }
+
+    rx = Regex('pat');
+    if (rx.subst('some pat for patbar', 'foo') != 'some foo for foobar')
+        cout `FAILED basic string replacement\n`;
+    
+    if (rx.subst('some pat for patbar', 'foo', 1) != 'some foo for patbar')
+        cout `FAILED counted string replacement\n`;
+    
+    if (rx.subst('patpat', 'foo') != 'foofoo')
+        cout `FAILED replacement at beginning or end or abuttal\n`;
+    
+    if (rx.subst('some pat for patbar', replacer) != 'some foo for foobar')
+        cout `FAILED function replacement\n`;
+}
+
+if (1) {
+    rx = Regex(r'foo');
+    if (!rx.match('foobar'))
+        cout `FAILED match() on matching string\n`;
+    
+    if (rx.match('babafoo'))
+        cout `FAILED !match() not starting with matching string\n`;
+}
+
+cout `ok\n`;
