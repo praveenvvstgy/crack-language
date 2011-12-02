@@ -24,7 +24,7 @@
 using namespace crack::ext;
 
 extern "C" bool __CrackUncaughtException();
-extern "C" void crack_runtime_time_init(crack::ext::Module *mod);
+extern "C" void crack_runtime_time_cinit(crack::ext::Module *mod);
 
 // stat() appears to have some funny linkage issues in native mode so we wrap 
 // it in a normal function.
@@ -254,6 +254,15 @@ extern "C" void crack_runtime_cinit(Module *mod) {
     mod->addConstant(intType, "O_ASYNC", O_ASYNC);
     mod->addConstant(intType, "O_CREAT", O_CREAT);
 
+    f = mod->addFunc(byteptrType, "getcwd", (void *)getcwd);
+    f->addArg(byteptrType, "buffer");
+    f->addArg(uintzType, "size");
+
+    mod->addConstant(uintzType, "PATH_MAX", PATH_MAX);
+
+    f = mod->addFunc(intType, "chdir", (void *)chdir);
+    f->addArg(byteptrType, "path");
+
     // Net
     
     mod->addConstant(intType, "AF_UNIX", AF_UNIX);
@@ -333,28 +342,28 @@ extern "C" void crack_runtime_cinit(Module *mod) {
     f = sockAddrInType->addStaticMethod(
         uint32Type, 
         "htonl",
-        (void *)&crack::runtime::SockAddrIn::htonl
+        (void *)&crack::runtime::SockAddrIn::crack_htonl
     );
     f->addArg(uint32Type, "val");
 
     f = sockAddrInType->addStaticMethod(
         uint32Type, 
         "ntohl",
-        (void *)&crack::runtime::SockAddrIn::ntohl
+        (void *)&crack::runtime::SockAddrIn::crack_ntohl
     );
     f->addArg(uint32Type, "val");
 
     f = sockAddrInType->addStaticMethod(
         uintType, 
         "htons",
-        (void *)&crack::runtime::SockAddrIn::htons
+        (void *)&crack::runtime::SockAddrIn::crack_htons
     );
     f->addArg(uintType, "val");
     
     f = sockAddrInType->addStaticMethod(
         uintType,
         "ntohs",
-        (void *)&crack::runtime::SockAddrIn::ntohs
+        (void *)&crack::runtime::SockAddrIn::crack_ntohs
     );
     f->addArg(uintType, "val");
     
@@ -395,7 +404,7 @@ extern "C" void crack_runtime_cinit(Module *mod) {
                               CRACK_OFFSET(crack::runtime::PollEvt, events)
                               );
     pollEventType->addInstVar(intType, "revents", 
-                              CRACK_OFFSET(pollfd, revents)
+                              CRACK_OFFSET(crack::runtime::PollEvt, revents)
                               );
     pollEventType->addConstructor();
     pollEventType->finish();
@@ -498,6 +507,12 @@ extern "C" void crack_runtime_cinit(Module *mod) {
     f->addArg(uintType, "size");
     f->addArg(uintType, "index");
     f->addArg(pollEventType, "outputEntry");
+
+    f = pollSetType->addMethod(intType, "delete",
+                               (void *)crack::runtime::PollSet_delete
+                               );
+    f->addArg(uintType, "size");
+    f->addArg(uintType, "index");
     
     f = pollSetType->addMethod(intType, "poll",
                                (void *)crack::runtime::PollSet_poll
@@ -644,7 +659,7 @@ extern "C" void crack_runtime_cinit(Module *mod) {
     crack::runtime::math_init(mod);
     
     // Add time functions
-    crack_runtime_time_init(mod);
+    crack_runtime_time_cinit(mod);
     
     // add exception functions
     mod->addConstant(intType, "EXCEPTION_MATCH_FUNC", 

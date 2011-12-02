@@ -1,8 +1,8 @@
 # Copyright 2010 Google Inc.
 
-import crack.lang Buffer, Exception, FreeBase, InvalidStateError, 
-    ManagedBuffer, WriteBuffer;
-import crack.io FStr, Reader, Writer, Formatter, cout;
+import crack.lang Buffer, Exception, FreeBase, InvalidArgumentError,
+    InvalidStateError, ManagedBuffer, WriteBuffer;
+import crack.io Formatter, FStr, Reader, Writer, cout;
 import crack.sys strerror;
 import crack.cont.array Array;
 import crack.time TimeDelta;
@@ -13,6 +13,8 @@ import crack.runtime connect, makeIPV4, setsockopt, accept, bind, free,
     SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_RAW, SOCK_RDM, SOCK_PACKET, 
     SOCK_NONBLOCK, SOCK_CLOEXEC, SOL_SOCKET, SO_REUSEADDR, POLLIN, POLLOUT, 
     POLLPRI, POLLERR, POLLHUP, POLLNVAL, INADDR_ANY;
+
+@import crack.ann implements;
 
 @export_symbols AF_UNIX, AF_LOCAL, AF_INET, AF_INET6, AF_IPX, AF_NETLINK, 
     AF_X25, AF_AX25, AF_ATMPVC, AF_APPLETALK, AF_PACKET, SOCK_STREAM, 
@@ -25,6 +27,11 @@ import crack.runtime connect, makeIPV4, setsockopt, accept, bind, free,
     @abstract int getFD();
 }
 
+## An event received by a poller.
+## Attributes are:
+##  pollable: the pollable object.
+##  events: the original events that we were waiting for
+##  revents: the events that were triggered
 class PollEvent : Object, PollEvt {
     Pollable pollable;
 }
@@ -106,7 +113,7 @@ Array[Address] resolve(String hostname) {
 }
 
 ## Wrapper around a socket.
-class Socket : Pollable, Reader, Writer {
+class Socket : Pollable @implements Reader, Writer {
     int fd;
     
     # the address the socket is bound to.
@@ -150,7 +157,7 @@ class Socket : Pollable, Reader, Writer {
     }
     
     bool setReuseAddr(bool val) {
-        return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1 ) == 0;
+        return setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, val ? 1 : 0) == 0;
     }
     
     int send(Buffer data, int flags) {
@@ -196,8 +203,6 @@ class Socket : Pollable, Reader, Writer {
         return uint(rc);
     }
     
-    Object getReaderObject() { return this; }
-    
     # Writer interface
     void write(Buffer data) {
         rc := send(data, 0);
@@ -206,8 +211,6 @@ class Socket : Pollable, Reader, Writer {
         if (rc != data.size)
             throw Exception('Incomplete write to socket');
     }
-
-    Object getWriterObject() { return this; }
 }
         
 ## A poller is a collection of Pollables that you can use to wait for an event
@@ -249,6 +252,32 @@ class Poller {
         __fds.set(__nextIndex, p.getFD(), events, 0);
         
         ++__nextIndex;
+    }
+    
+    void remove(Pollable p) {
+        int i;
+        for (i = 0; i < __pollables.count() && __pollables[i] != p; ++i) ;
+        if (i == __pollables.count())
+            throw InvalidArgumentError(FStr() `Pollable is not in the set`);
+        __pollables.delete(i);
+        __fds.delete(__nextIndex, i);
+        --__nextIndex;
+    }
+    
+    ## Sets the events that we will wait on from the pollable.
+    void setEvents(Pollable pollable, int events) {
+        # find the index of the pollable
+        int i;
+        for (p :in __pollables)
+            if (p is pollable)
+                break;
+            else
+                ++i;
+        
+        if (i == __pollables.count())
+            throw InvalidArgumentError(FStr() `Pollable not in Poller`);
+        
+        __fds.set(i, pollable.getFD(), events, 0);
     }
 
     ## Wait for up to timeout or until the next event.  'timeout' may be null, 

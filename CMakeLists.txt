@@ -11,9 +11,9 @@ endif(COMMAND cmake_policy)
 
 project (crack)
 
-set(CRACK_VERSION "0.5")
-set(CRACKLANG_API_VERSION "2.0.0")
-set(NATRUN_API_VERSION "1.0.1")
+set(CRACK_VERSION "0.6")
+set(CRACKLANG_API_VERSION "3.0.0")
+set(NATRUN_API_VERSION "2.0.0")
 
 set(LLVM_MIN_VERSION       "2009000")
 set(LLVM_MIN_VERSION_TEXT  "2.9")
@@ -31,10 +31,14 @@ MESSAGE( STATUS "CMAKE_MODULE_PATH: " ${CMAKE_MODULE_PATH} )
 MESSAGE( STATUS "CMAKE_SYSTEM_PROCESSOR: " ${CMAKE_SYSTEM_PROCESSOR} )
 
 Find_Package(LLVM REQUIRED)
+IF(NOT LLVM_CONFIG_EXECUTABLE)
+  MESSAGE(FATAL_ERROR "LLVM not found. Please install ${LLVM_MIN_VERSION_TEXT} or"
+                      " greater, or set LLVM_DIR environment variable")
+ENDIF (NOT LLVM_CONFIG_EXECUTABLE)
 
 IF( LLVM_VERSION LESS ${LLVM_MIN_VERSION} )
-  MESSAGE(FATAL_ERROR "LLVM version ${LLVM_STRING_VERSION} is too old,
-                       please install ${LLVM_MIN_VERSION_TEXT} of greater!")
+  MESSAGE(FATAL_ERROR "LLVM version ${LLVM_STRING_VERSION} is too old,"
+                      " please install ${LLVM_MIN_VERSION_TEXT} or greater!")
 ENDIF( LLVM_VERSION LESS ${LLVM_MIN_VERSION} )
 
 include_directories(${PROJECT_SOURCE_DIR}

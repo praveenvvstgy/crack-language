@@ -14,8 +14,6 @@
 
 #include <iostream>
 
-#include "ext/Object.h"
-
 using namespace std;
 
 namespace {
@@ -46,20 +44,20 @@ void SockAddrIn::init2(SockAddrIn *inst, uint32_t addr0, unsigned int port0) {
     inst->port = port0;
 }
 
-uint32_t SockAddrIn::htonl(uint32_t val) {
-    return ::htonl(val);
+uint32_t SockAddrIn::crack_htonl(uint32_t val) {
+    return htonl(val);
 }
 
-uint32_t SockAddrIn::ntohl(uint32_t val) {
-    return ::ntohl(val);
+uint32_t SockAddrIn::crack_ntohl(uint32_t val) {
+    return ntohl(val);
 }
 
-uint16_t SockAddrIn::htons(uint16_t val) {
-    return ::htons(val);
+uint16_t SockAddrIn::crack_htons(uint16_t val) {
+    return htons(val);
 }
 
-uint16_t SockAddrIn::ntohs(uint16_t val) {
-    return ::ntohs(val);
+uint16_t SockAddrIn::crack_ntohs(uint16_t val) {
+    return ntohs(val);
 }
 
 void TimeVal::init(TimeVal *inst, int32_t secs0, int32_t nsecs0) {
@@ -151,6 +149,12 @@ int PollSet_next(struct pollfd *set, unsigned int size, unsigned int index,
     return -1;
 }
 
+void PollSet_delete(struct pollfd *set, unsigned int size, unsigned int index) {
+    memmove(set + index, set + index + 1, 
+            (size - index - 1) * sizeof(struct pollfd)
+            );
+}
+
 int PollSet_poll(struct pollfd *fds, unsigned int nfds, TimeVal *tv,
                  sigset_t *sigmask
                  ) {
@@ -208,3 +212,4 @@ sockaddr_in *AddrInfo_getInAddr(addrinfo *ai) {
 }
 
 }} // namespace crack::runtime
+

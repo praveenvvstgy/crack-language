@@ -66,7 +66,7 @@ void usage(int retval) {
     cout << " -C         --no-cache           Do not cache or use cached modules"
             << endl;
     */
-    cout << " -C                              Turn on module caching" << endl;
+    cout << " -C                              Turn on module caching (unfinished, not fully working)" << endl;
 
     cout << " -g         --debug              Generate DWARF debug information"
             << endl;
@@ -104,6 +104,8 @@ int main(int argc, char **argv) {
                                 jitBuilder;
 
     string libPath;
+    if (getenv("CRACK_LIB_PATH"))
+        libPath = getenv("CRACK_LIB_PATH");
 
     // parse the main module
     int opt, idx;
