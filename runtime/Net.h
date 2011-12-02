@@ -7,8 +7,6 @@
 #include <signal.h>
 #include <poll.h>
 #include <netdb.h>
-#include "ext/Object.h"
-#include <iostream> // XXX remove
 
 namespace crack { namespace runtime {
 
@@ -58,10 +56,10 @@ struct SockAddrIn : public SockAddr {
 
     static void init2(SockAddrIn *inst, uint32_t addr, unsigned int port);
 
-    static uint32_t htonl(uint32_t val);    
-    static uint32_t ntohl(uint32_t val);
-    static uint16_t htons(uint16_t val);
-    static uint16_t ntohs(uint16_t val);
+    static uint32_t crack_htonl(uint32_t val);    
+    static uint32_t crack_ntohl(uint32_t val);
+    static uint16_t crack_htons(uint16_t val);
+    static uint16_t crack_ntohs(uint16_t val);
 };
 
 struct TimeVal {
@@ -101,6 +99,7 @@ void PollSet_get(struct pollfd *set, unsigned int index,
 int PollSet_next(struct pollfd *set, unsigned int size, unsigned int index, 
                  PollEvt *outputEntry
                  );
+void PollSet_delete(struct pollfd *set, unsigned int size, unsigned int index);
 int PollSet_poll(struct pollfd *fds, unsigned int nfds, TimeVal *tv,
                  sigset_t *sigmask
                  );

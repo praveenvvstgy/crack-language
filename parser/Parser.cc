@@ -37,6 +37,7 @@
 #include "builder/Builder.h"
 #include "ParseError.h"
 #include <cstdlib>
+#define __STDC_LIMIT_MACROS 1
 #include <stdint.h>
 
 using namespace std;
@@ -1790,6 +1791,24 @@ int Parser::parseFuncDef(TypeDef *returnType, const Token &nameTok,
                      "Abstract functions can only be defined in an abstract "
                       "class."
                      );
+            
+            // verify that the class has no dependents
+            vector<TypeDefPtr> deps;
+            classTypeDef->getDependents(deps);
+            if (deps.size()) {
+               stringstream msg;
+               msg << "You cannot declare an abstract function after "
+                      "the nested derived class";
+               if (deps.size() == 1)
+                  msg << " " << deps[0]->name << ".";
+               else {
+                  msg << "es: ";
+                  for (int i = 0; i < deps.size(); ++i)
+                     msg << (i ? ", " : "") << deps[i]->name;
+                  msg << ".";
+               }
+               error(tok3, msg.str());
+            }
 
             flags = flags | FuncDef::abstract | FuncDef::virtualized | 
                FuncDef::method;
@@ -2157,6 +2176,7 @@ ContextPtr Parser::parseIfStmt() {
    ContextPtr terminalElse;
 
    // check for the "else"
+   state = st_optElse;
    tok = getToken();
    if (tok.isElse()) {
       pos = context->builder.emitElse(*context, pos.get(), terminalIf);
@@ -2166,6 +2186,11 @@ ContextPtr Parser::parseIfStmt() {
       toker.putBack(tok);
       context->builder.emitEndIf(*context, pos.get(), terminalIf);
    }
+   
+   // absorb the flags from the context (an annotation would set flags in the 
+   // nested if context)
+   context->parent->nextFuncFlags = context->nextFuncFlags;
+   context->parent->nextClassFlags = context->nextClassFlags;
 
    // the if is terminal if both conditions are terminal.  The terminal 
    // context is the innermost of the two.
@@ -2366,14 +2391,6 @@ void Parser::parseReturnStmt() {
       context->builder.emitReturn(*context, 0);
       return;
    }
-   // if return type is void, but they are trying to return an expression,
-   // fail with message
-   else if (context->returnType == context->construct->voidType) {
-      error(tok,
-            SPUG_FSTR("Cannot return expression from function "
-                      "with return type void")
-            );
-   }
 
    // parse the return expression, make sure that it matches the return type.
    toker.putBack(tok);
@@ -2393,6 +2410,15 @@ void Parser::parseReturnStmt() {
                       )
             );
    
+   // if the expression is of type void, emit it now and don't try to get the
+   // builder to generate it.
+   if (expr->type == context->construct->voidType) {
+      context->createCleanupFrame();
+      expr->emit(*context)->handleTransient(*context);
+      context->closeCleanupFrame();
+      expr = 0;
+   }
+
    // emit the return statement
    context->builder.emitReturn(*context, expr.get());
 

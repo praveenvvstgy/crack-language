@@ -9,10 +9,12 @@
 namespace llvm {
     class Module;
     class MDNode;
+    class Value;
 }
 
 namespace model {
     class VarDef;
+    class Namespace;
 }
 
 namespace builder {
@@ -29,7 +31,10 @@ class Cacher {
 
     enum DefTypes {
         global = 0,
-        function = 1
+        function,
+        member,
+        method,
+        type
     };
 
     BModuleDef *modDef;
@@ -40,8 +45,14 @@ protected:
     void addNamedStringNode(const std::string &key, const std::string &val);
     std::string getNamedStringNode(const std::string &key);
 
-    llvm::MDNode *writeVarDef(model::VarDef *);
-    llvm::MDNode *writeFuncDef(model::FuncDef *);
+    void writeNamespace(model::Namespace* ns);
+
+    llvm::MDNode *writeType(model::TypeDef* t);
+    llvm::MDNode *writeVarDef(model::VarDef *, model::TypeDef *owner);
+    llvm::MDNode *writeFuncDef(model::FuncDef *, model::TypeDef *owner);
+
+    void readFuncDef(const std::string &, llvm::Value *, llvm::MDNode *);
+    void readTypeDef(const std::string &, llvm::MDNode *);
 
     void writeBitcode(const std::string &path);
 

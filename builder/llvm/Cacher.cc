@@ -116,77 +116,140 @@ void Cacher::writeMetadata() {
     // crack_defs: the symbols defined in this module that we need to rebuild
     // at compile time in order to use this cached module to compile fresh code
     // from
-    node = module->getOrInsertNamedMetadata("crack_defs");
+    writeNamespace(modDef);
+
+    //module->dump();
+
+}
+
+void Cacher::writeNamespace(Namespace *ns) {
+
     OverloadDef *ol;
-    Namespace *mns = static_cast<Namespace*>(modDef);
-    for (ModuleDef::VarDefMap::const_iterator i = modDef->beginDefs();
-         i != modDef->endDefs();
+    TypeDef *td;
+    TypeDef *owner = dynamic_cast<TypeDef*>(ns);
+    NamedMDNode *node = modDef->rep->getOrInsertNamedMetadata("crack_defs");
+
+    for (Namespace::VarDefMap::const_iterator i = ns->beginDefs();
+         i != ns->endDefs();
          ++i) {
         if (ol = dynamic_cast<OverloadDef*>(i->second.get())) {
             for (OverloadDef::FuncList::const_iterator f = ol->beginTopFuncs();
                  f != ol->endTopFuncs();
                  ++f) {
                 // skip aliases
-                if ((*f)->getOwner() == mns)
-                    node->addOperand(writeFuncDef((*f).get()));
+                if ((*f)->getOwner() == ns)
+                    node->addOperand(writeFuncDef((*f).get(), owner));
             }
         }
         else {
             // skip aliases
-            if (i->second->getOwner() == mns)
-                node->addOperand(writeVarDef(i->second.get()));
+            if (i->second->getOwner() != ns)
+                continue;
+            if (td = dynamic_cast<TypeDef*>(i->second.get())) {
+                node->addOperand(writeType(td));
+                writeNamespace(td);
+            }
+            else {
+                // VarDef
+                node->addOperand(writeVarDef(i->second.get(), owner));
+            }
         }
     }
 
-    //module->dump();
-
 }
 
-MDNode *Cacher::writeFuncDef(FuncDef *sym) {
+MDNode *Cacher::writeType(model::TypeDef* t) {
+
+    BTypeDef *bt = dynamic_cast<BTypeDef *>(t);
+    assert(bt && "not BTypeDef");
 
     vector<Value *> dList;
 
-    BFuncDef *bf = dynamic_cast<BFuncDef *>(sym);
-    assert(bf && "not BFuncDef");
+    // operand 0: symbol name (not canonical)
+    dList.push_back(MDString::get(getGlobalContext(), t->name));
+
+    // operand 1: symbol type
+    dList.push_back(constInt(Cacher::type));
+
+    // operand 2: llvm rep
+    dList.push_back(NULL);
+
+    return MDNode::get(getGlobalContext(), dList.data(), dList.size());
+
+}
+
+MDNode *Cacher::writeFuncDef(FuncDef *sym, TypeDef *owner) {
+
+    vector<Value *> dList;
 
     // operand 0: symbol name (not canonical)
     dList.push_back(MDString::get(getGlobalContext(), sym->name));
 
     // operand 1: symbol type
-    dList.push_back(constInt(Cacher::function));
+    if (owner)
+        dList.push_back(constInt(Cacher::method));
+    else
+        dList.push_back(constInt(Cacher::function));
 
     // operand 2: llvm rep
-    dList.push_back(bf->rep);
+    BFuncDef *bf = dynamic_cast<BFuncDef *>(sym);
+    if (bf)
+        dList.push_back(bf->rep);
+    else
+        dList.push_back(NULL);
 
-    // operand 3: funcdef flags
-    dList.push_back(constInt(bf->flags));
+    // operand 3: typedef owner
+    if (owner)
+        dList.push_back(MDString::get(getGlobalContext(), owner->name));
+    else
+        dList.push_back(NULL);
 
-    // operand 4..ARITY: parameter symbol names
-    for (FuncDef::ArgVec::const_iterator i = bf->args.begin();
-         i != bf->args.end();
+    // operand 4: funcdef flags
+    dList.push_back(constInt(sym->flags));
+
+    // operand 5: return type
+    dList.push_back(MDString::get(getGlobalContext(), sym->returnType->name));
+
+    // operand 6..ARITY: pairs of parameter symbol names and their types
+    for (FuncDef::ArgVec::const_iterator i = sym->args.begin();
+         i != sym->args.end();
          ++i) {
         dList.push_back(MDString::get(getGlobalContext(), (*i)->name));
+        dList.push_back(MDString::get(getGlobalContext(), (*i)->type->name));
     }
 
     return MDNode::get(getGlobalContext(), dList.data(), dList.size());
 
 }
 
-MDNode *Cacher::writeVarDef(VarDef *sym) {
+MDNode *Cacher::writeVarDef(VarDef *sym, TypeDef *owner) {
 
     vector<Value *> dList;
 
-    BGlobalVarDefImpl *bvar = dynamic_cast<BGlobalVarDefImpl *>(sym->impl.get());
-    assert(bvar && "not BGlobalVarDefImpl");
+    BGlobalVarDefImpl *gvar = dynamic_cast<BGlobalVarDefImpl *>(sym->impl.get());
+    BInstVarDefImpl *ivar = dynamic_cast<BInstVarDefImpl *>(sym->impl.get());
+    assert(gvar || ivar && "not global or instance");
 
     // operand 0: symbol name (not canonical)
     dList.push_back(MDString::get(getGlobalContext(), sym->name));
 
     // operand 1: symbol type
-    dList.push_back(constInt(Cacher::global));
+    if (owner)
+        dList.push_back(constInt(Cacher::member));
+    else
+        dList.push_back(constInt(Cacher::global));
 
-    // operand 2: llvm rep
-    dList.push_back(bvar->rep);
+    // operand 2: llvm rep or instance var index
+    if (gvar)
+        dList.push_back(gvar->rep);
+    else
+        dList.push_back(constInt(ivar->index));
+
+    // operand 3: typedef owner
+    if (owner)
+        dList.push_back(MDString::get(getGlobalContext(), owner->name));
+    else
+        dList.push_back(NULL);
 
     return MDNode::get(getGlobalContext(), dList.data(), dList.size());
 
@@ -227,16 +290,101 @@ bool Cacher::readImports() {
 
 }
 
+void Cacher::readTypeDef(const std::string &sym,
+                         llvm::MDNode *mnode) {
+
+    BTypeDef *t = new BTypeDef(NULL/* model meta type def */, sym, NULL /* XXX llvm type def */);
+    modDef->addDef(t);
+
+}
+
+void Cacher::readFuncDef(const std::string &sym,
+                         llvm::Value *rep,
+                         llvm::MDNode *mnode) {
+
+    assert(rep && "no rep");
+
+    // operand 3: typedef owner (if exists)
+    MDString *ownerStr = dyn_cast<MDString>(mnode->getOperand(3));
+
+    // operand 4: func flags
+    ConstantInt *flags = dyn_cast<ConstantInt>(mnode->getOperand(4));
+    assert(flags && "malformed def node: function flags");
+
+    // operand 5: return type
+    MDString *rtStr = dyn_cast<MDString>(mnode->getOperand(5));
+    assert(rtStr && "malformed def node: function return type");
+
+    // llvm function
+    Function *f = dyn_cast<Function>(rep);
+    assert(f && "malformed def node: llvm rep not function");
+
+    // model funcdef
+    BFuncDef *newF = new BFuncDef((FuncDef::Flags)flags->getLimitedValue(),
+                                  sym,
+                                  f->getArgumentList().size());
+    newF->rep = f;
+
+    if (ownerStr) {
+        VarDefPtr o = modDef->lookUp(ownerStr->getString().str());
+        assert(o && "owner not found");
+        TypeDef *td = dynamic_cast<TypeDef*>(o.get());
+        assert(td && "owner not type");
+        newF->setOwner(td);
+    }
+    else {
+        newF->setOwner(modDef);
+    }
+
+    VarDefPtr vd = modDef->lookUp(rtStr->getString().str());
+    TypeDef *td = TypeDefPtr::rcast(vd);
+    assert(td && "return type not found");
+
+    newF->returnType = td;
+
+    if (mnode->getNumOperands() > 4) {
+
+        MDString *aSym, *aTypeStr;
+        VarDefPtr aTypeV;
+        TypeDef *aType;
+
+        // operand 6..arity: function parameter names and types
+        for (int i = 6, ai=0; i < mnode->getNumOperands(); i+=2, ++ai) {
+
+            aSym = dyn_cast<MDString>(mnode->getOperand(i));
+            assert(aSym && "function arg: missing symbol");
+            aTypeStr = dyn_cast<MDString>(mnode->getOperand(i+1));
+            assert(aTypeStr && "function arg: missing type");
+            aTypeV = context.ns->lookUp(aTypeStr->getString().str());
+            aType = TypeDefPtr::rcast(aTypeV);
+            assert(aType && "function arg: type not found");
+            newF->args[ai] = new ArgDef(aType, aSym->getString().str());
+
+        }
+    }
+
+    OverloadDef *o;
+    vd = modDef->lookUp(sym);
+    if (!vd) {
+        o = new OverloadDef(sym);
+        o->addFunc(newF);
+        modDef->addDef(o);
+    }
+    else {
+        o = OverloadDefPtr::rcast(vd);
+        assert(o && "not an overload");
+        o->addFunc(newF);
+    }
+
+
+}
+
 void Cacher::readDefs() {
 
     MDNode *mnode;
     MDString *mstr;
     string sym;
     Value *rep;
-    Function *f;
-    ConstantInt *flags;
-    BFuncDef *newF;
-    OverloadDef *o;
     NamedMDNode *imports = modDef->rep->getNamedMetadata("crack_defs");
 
     assert(imports && "missing crack_defs node");
@@ -256,39 +404,21 @@ void Cacher::readDefs() {
 
         // operand 2: llvm rep
         rep = mnode->getOperand(2);
-        assert(rep && "malformed def node: llvm rep");
+        //assert(rep && "malformed def node: llvm rep");
 
         switch (type->getLimitedValue()) {
         case Cacher::function:
-
-            // operand 3: func flags
-            flags = dyn_cast<ConstantInt>(mnode->getOperand(3));
-            assert(flags && "malformed def node: function flags");
-
-            // llvm function
-            f = dyn_cast<Function>(rep);
-            assert(f && "malformed def node: llvm rep not function");
-
-            // model funcdef
-            newF = new BFuncDef((FuncDef::Flags)flags->getLimitedValue(),
-                                          sym,
-                                          f->getArgumentList().size());
-            // XXX what else?
-            newF->rep = f;
-            newF->setOwner(modDef);
-
-            // XXX build/get real return type
-            newF->returnType = context.construct->int32Type;
-
-            // XXX lookup and add to current overload if exists
-            o = new OverloadDef(sym);
-            o->addFunc(newF);
-
-            modDef->addDef(o);
-
+        case Cacher::method:
+            readFuncDef(sym, rep, mnode);
             break;
-
         case Cacher::global:
+            // XXX
+            break;
+        case Cacher::type:
+            readTypeDef(sym, mnode);
+            break;
+        case Cacher::member:
+            // XXX
             break;
 
         default:
@@ -364,7 +494,9 @@ void Cacher::writeBitcode(const string &path) {
 BModuleDef *Cacher::maybeLoadFromCache(const string &canonicalName,
                                        const string &path) {
 
-    string cacheFile = getCacheFilePath(context, options, canonicalName, "bc");
+    string cacheFile = getCacheFilePath(options,
+                                        path,
+                                        "bc");
     if (cacheFile.empty())
         return NULL;
 
@@ -413,7 +545,9 @@ void Cacher::saveToCache() {
     assert(modDef && "empty modDef for saveToCache");
     assert(!modDef->path.empty() && "module source path not set");
 
-    string cacheFile = getCacheFilePath(context, options, modDef->getFullName(), "bc");
+    string cacheFile = getCacheFilePath(options,
+                                        modDef->path,
+                                        "bc");
     if (cacheFile.empty()) {
         if (options->verbosity >= 1)
             cerr << "unable to find writeable directory for cache: caching skipped"
