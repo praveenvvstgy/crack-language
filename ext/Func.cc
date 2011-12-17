@@ -79,11 +79,18 @@ void Func::finish() {
                                            );
     }
 
+    Context *classCtx = context;
+    if (context->scope == Context::composite && context->parent &&
+        context->parent->scope == Context::instance)
+    {
+        classCtx = context->parent.get();
+    }
+
     FuncDefPtr funcDef;
     // if this is a method, get the receiver type
     TypeDefPtr receiverType;
     if ((flags & method) || (flags & constructor))
-        receiverType = TypeDefPtr::arcast(context->ns);
+        receiverType = TypeDefPtr::arcast(classCtx->ns);
 
     // if we have a function pointer, create a extern function for it
     if (funcPtr) {
@@ -141,8 +148,8 @@ void Func::finish() {
         VarDefPtr storedDef = context->addDef(funcDef.get(), receiverType.get());
 
         // check for a static method, add it to the meta-class
-        if (context->scope == Context::instance) {
-            TypeDef *type = TypeDefPtr::arcast(context->ns);
+        if (classCtx->scope == Context::instance) {
+            TypeDef *type = TypeDefPtr::arcast(classCtx->ns);
             if (type != type->type.get())
                 type->type->addAlias(storedDef.get());
         }
@@ -204,7 +211,8 @@ void Func::finish() {
         funcContext->builder.emitEndFunc(*funcContext, newFunc.get());
         context->addDef(newFunc.get(), receiverType.get());
 
-        receiverType->createNewFunc(*context, newFunc.get());
+        std::cout << "create new ctor for " << newFunc->getReceiverType()->name << std::endl;
+        receiverType->createNewFunc(*classCtx, newFunc.get());
     }
 
     finished = true;

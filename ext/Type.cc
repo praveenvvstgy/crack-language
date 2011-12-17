@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <iostream>
 #include "builder/Builder.h"
+#include "model/CompositeNamespace.h"
 #include "model/Context.h"
 #include "model/TypeDef.h"
 #include "Func.h"
@@ -151,7 +152,7 @@ void Type::finish() {
     // ignore this if we're already finished.
     if (finished || (!impl && typeDef && !typeDef->forward))
         return;
-    
+
     Context *ctx = impl->context;
 
     // construct the list of bases
@@ -174,6 +175,13 @@ void Type::finish() {
         ctx->builder.emitBeginClass(*clsCtx, impl->name, bases, typeDef);
     typeDef = td.get();
 
+    // create a lexical context which delegates to both the class context and
+    // the parent context.
+    NamespacePtr lexicalNS =
+        new CompositeNamespace(td.get(), impl->context->ns.get());
+    ContextPtr lexicalContext =
+        clsCtx->createSubContext(Context::composite, lexicalNS.get());
+
     // emit the variables
     for (int vi = 0; vi < impl->instVarVec.size(); ++vi) {
         Var *var = impl->instVarVec[vi];
@@ -192,7 +200,7 @@ void Type::finish() {
          ++fi
          ) {
         // bind the class context to the function, then finish it.
-        (*fi)->context = clsCtx.get();
+        (*fi)->context = lexicalContext.get();
         (*fi)->finish();
     }
     
