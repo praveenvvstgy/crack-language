@@ -1,0 +1,128 @@
+## Copyright 2010 Google Inc
+## Module for manipulating ascii stirngs.
+
+import crack.io cout;
+import crack.lang ManagedBuffer, Buffer;
+import crack.strutil StringArray, split;
+ 
+## Returns the number converted to a string in the specified base - e.g. 
+## radix(26, 16) -> '1a'
+String radix(uintz val, uint base) {
+    const SIZE := 20;
+    ManagedBuffer tempBuf = {SIZE};
+    byteptr cur = tempBuf.buffer + SIZE + -1;
+    cur[0] = 0;
+    cur = cur + -1;
+    uint size;
+    
+    if (!val) {
+        cur += -1;
+        cur[0] = b'0';
+        size = 1;
+    } else {
+        while (val) {
+            cur += -1;
+            b := byte(val % base);
+            if (b < 10)
+                b += b'0';
+            else
+                b += b'a' - byte(10);
+            cur[0] = b;
+            val = val / base;
+            ++size;
+        }
+    }
+    return String(cur, size, false);
+}
+
+
+String _changeCase(String text, byte lowerBound, byte upperBound, byte newOffset, 
+                    uint num)
+{
+    oldBuf := text.buffer;
+    ManagedBuffer newVal = {text.size};
+    newBuf := newVal.buffer;
+    byte c;
+
+    for (uint i = 0; i < num && i < text.size; i++){
+        c = oldBuf[i];
+        if (c >= lowerBound && c <= upperBound){
+            byte offset = c - lowerBound;
+            newBuf[i] = newOffset + offset;
+        } else {
+            newBuf[i] = c;
+        }
+    }
+
+    return String(newVal, true);
+}
+
+## Change all characters in a string to uppercase
+String toUpper(String text){
+    return _changeCase(text, b'a', b'z', b'A', text.size);
+}
+
+## Change all characters in a string to lowercase
+String toLower(String text){
+    return _changeCase(text, b'A', b'Z', b'a', text.size);
+}
+
+## Capitalize the initial character of numWords words in a string
+## XXX this fails to preserve interspersed whitespace.
+String capitalize(String text, uint numWords){
+    StringArray words = split(text);
+    byteptr wordBuf,wordBufCopy;
+
+    for (uint i = 0; i < words.count() && i < numWords; i++){
+        wordBuf = words[i].buffer;
+        if (words[i].size > 0 && wordBuf[0] >= b'a' && wordBuf[0] <= b'z'){
+            words[i] = String(words[i]); // copy string since we're going to modify it
+            words[i].buffer[0] = b'A' + (wordBuf[0] - b'a');
+        }
+    }
+
+    return words.join(' ');
+}
+
+## Capitalize the initial character of all words in a string
+String capitalize(String text){
+    return capitalize(text, text.size);
+}
+
+## Returns true if 'ch' is a whitespace character.
+bool isSpace(byte ch) {
+    return ch == b' ' || ch == b'\t' || ch == b'\n' || ch == b'\r';
+}
+
+## Returns true if the entire string is whitespace or if the string is empty.
+bool isSpace(String text) {
+    for (int i = 0; i < text.size; ++i) {
+        byte ch = text[i];
+        if (ch != b' ' && ch != b'\t' && ch != b'\n' && ch != b'\r')
+            return false;
+    }
+    return true;
+}
+
+## Returns true if the byte is a digit.
+bool isDigit(byte b) {
+    return b >= b'0' && b <= b'9';
+}
+
+## Strip trailing and leading whitespace off a string.
+String strip(String text) {
+    int start, end;
+    for (start = 0; start < text.size && isSpace(text[start]); ++start);
+    
+    # if the string is entirely whitespace, return the empty string
+    if (start == text.size)
+        return '';
+    
+    # we can now assume that the string is at least one character, find the 
+    # last non-whitespace character.
+    for (end = text.size - 1; isSpace(text[end]); --end);
+    
+    # 'end' is now the last non-whitespace character, slice the string after 
+    # that.
+    return text.slice(start, end + 1);
+}
