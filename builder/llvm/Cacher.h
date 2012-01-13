@@ -47,12 +47,14 @@ protected:
 
     void writeNamespace(model::Namespace* ns);
 
-    llvm::MDNode *writeType(model::TypeDef* t);
+    llvm::MDNode *writeTypeDef(model::TypeDef* t);
     llvm::MDNode *writeVarDef(model::VarDef *, model::TypeDef *owner);
     llvm::MDNode *writeFuncDef(model::FuncDef *, model::TypeDef *owner);
 
+    void readVarDefMember(const std::string &, llvm::Value *, llvm::MDNode *);
+    void readVarDefGlobal(const std::string &, llvm::Value *, llvm::MDNode *);
     void readFuncDef(const std::string &, llvm::Value *, llvm::MDNode *);
-    void readTypeDef(const std::string &, llvm::MDNode *);
+    void readTypeDef(const std::string &, llvm::Value *, llvm::MDNode *);
 
     void writeBitcode(const std::string &path);
 
