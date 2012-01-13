@@ -4,6 +4,7 @@
 #include "BModuleDef.h"
 #include "model/Namespace.h"
 #include "model/OverloadDef.h"
+#include "model/NullConst.h"
 
 #include "builder/llvm/LLVMBuilder.h"
 #include "builder/BuilderOptions.h"
@@ -80,22 +81,33 @@ void Cacher::writeMetadata() {
     // crack_imports: operand list points to import nodes
     // import node: 0: canonical name 1: source digest
     node = module->getOrInsertNamedMetadata("crack_imports");
-    for (vector<BModuleDef*>::const_iterator varIter = modDef->importList.begin();
-         varIter != modDef->importList.end();
-         ++varIter
+    for (BModuleDef::ImportListType::const_iterator iIter = modDef->importList.begin();
+         iIter != modDef->importList.end();
+         ++iIter
          ) {
+        // op 1: canonical name
         dList.push_back(MDString::get(getGlobalContext(),
-                                      (*varIter)->getFullName()));
+                                      (*iIter).first->getFullName()));
+        // op 2: digest
         dList.push_back(MDString::get(getGlobalContext(),
-                                      (*varIter)->digest.asHex()));
+                                      (*iIter).first->digest.asHex()));
+
+        // op 3..n: symbols to be imported (aliased)
+        for (vector<string>::const_iterator sIter = (*iIter).second.begin();
+             sIter != (*iIter).second.end();
+             ++sIter) {
+            dList.push_back(MDString::get(getGlobalContext(), *sIter));
+        }
+
         node->addOperand(MDNode::get(getGlobalContext(), dList));
         dList.clear();
     }
 
     // crack_externs: these we need to resolve upon load. in the JIT, that means
-    // global mappings
+    // global mappings. we need to resolve functions and globals
     node = module->getOrInsertNamedMetadata("crack_externs");
     LLVMBuilder &b = dynamic_cast<LLVMBuilder &>(context.builder);
+    // functions
     for (LLVMBuilder::ModFuncMap::const_iterator i = b.moduleFuncs.begin();
          i != b.moduleFuncs.end();
          ++i) {
@@ -107,6 +119,14 @@ void Cacher::writeMetadata() {
         if ((!i->second->isDeclaration()) ||
             (owner && owner->fromExtension) ||
             (i->first->getOwner() == modDef->getParent(0).get()))
+            continue;
+        dList.push_back(MDString::get(getGlobalContext(), i->second->getNameStr()));
+    }
+    // globals
+    for (LLVMBuilder::ModVarMap::const_iterator i = b.moduleVars.begin();
+         i != b.moduleVars.end();
+         ++i) {
+        if (!i->second->isDeclaration())
             continue;
         dList.push_back(MDString::get(getGlobalContext(), i->second->getNameStr()));
     }
@@ -137,8 +157,11 @@ void Cacher::writeNamespace(Namespace *ns) {
                  f != ol->endTopFuncs();
                  ++f) {
                 // skip aliases
-                if ((*f)->getOwner() == ns)
-                    node->addOperand(writeFuncDef((*f).get(), owner));
+                if ((*f)->getOwner() == ns) {
+                    MDNode *n = writeFuncDef((*f).get(), owner);
+                    if (n)
+                        node->addOperand(n);
+                }
             }
         }
         else {
@@ -146,7 +169,7 @@ void Cacher::writeNamespace(Namespace *ns) {
             if (i->second->getOwner() != ns)
                 continue;
             if (td = dynamic_cast<TypeDef*>(i->second.get())) {
-                node->addOperand(writeType(td));
+                node->addOperand(writeTypeDef(td));
                 writeNamespace(td);
             }
             else {
@@ -158,7 +181,7 @@ void Cacher::writeNamespace(Namespace *ns) {
 
 }
 
-MDNode *Cacher::writeType(model::TypeDef* t) {
+MDNode *Cacher::writeTypeDef(model::TypeDef* t) {
 
     BTypeDef *bt = dynamic_cast<BTypeDef *>(t);
     assert(bt && "not BTypeDef");
@@ -171,8 +194,16 @@ MDNode *Cacher::writeType(model::TypeDef* t) {
     // operand 1: symbol type
     dList.push_back(constInt(Cacher::type));
 
-    // operand 2: llvm rep
-    dList.push_back(NULL);
+    // operand 2: llvm rep (null initializer)
+    dList.push_back(Constant::getNullValue(bt->rep));
+
+    // operand 3: metatype type (name string)
+    BTypeDef *btm = dynamic_cast<BTypeDef *>(bt->type.get());
+    assert(btm && "no meta class");
+    dList.push_back(MDString::get(getGlobalContext(), btm->name));
+
+    // operand 4: metatype type (null initializer)
+    dList.push_back(Constant::getNullValue(btm->rep));
 
     return MDNode::get(getGlobalContext(), dList);
 
@@ -195,8 +226,11 @@ MDNode *Cacher::writeFuncDef(FuncDef *sym, TypeDef *owner) {
     BFuncDef *bf = dynamic_cast<BFuncDef *>(sym);
     if (bf)
         dList.push_back(bf->rep);
-    else
-        dList.push_back(NULL);
+    else {
+        //cout << "skipping " << sym->name << "\n";
+        //dList.push_back(NULL);
+        return NULL;
+    }
 
     // operand 3: typedef owner
     if (owner)
@@ -218,6 +252,11 @@ MDNode *Cacher::writeFuncDef(FuncDef *sym, TypeDef *owner) {
         dList.push_back(MDString::get(getGlobalContext(), (*i)->type->name));
     }
 
+    // we register with the cache map because a cached module may be
+    // on this depended one for this run
+    LLVMBuilder &b = dynamic_cast<LLVMBuilder &>(context.builder);
+    b.registerDef(context, sym);
+
     return MDNode::get(getGlobalContext(), dList);
 
 }
@@ -226,6 +265,8 @@ MDNode *Cacher::writeVarDef(VarDef *sym, TypeDef *owner) {
 
     vector<Value *> dList;
 
+    BTypeDef *type = dynamic_cast<BTypeDef *>(sym->type.get());
+    assert(type && "writeVarDef: no type");
     BGlobalVarDefImpl *gvar = dynamic_cast<BGlobalVarDefImpl *>(sym->impl.get());
     BInstVarDefImpl *ivar = dynamic_cast<BInstVarDefImpl *>(sym->impl.get());
     assert(gvar || ivar && "not global or instance");
@@ -239,17 +280,31 @@ MDNode *Cacher::writeVarDef(VarDef *sym, TypeDef *owner) {
     else
         dList.push_back(constInt(Cacher::global));
 
-    // operand 2: llvm rep or instance var index
+    // operand 2: llvm rep (gvar) or null val (instance var)
     if (gvar)
         dList.push_back(gvar->rep);
     else
-        dList.push_back(constInt(ivar->index));
+        dList.push_back(Constant::getNullValue(type->rep));
 
-    // operand 3: typedef owner
+    // operand 3: type name
+    dList.push_back(MDString::get(getGlobalContext(), type->name));
+
+    // operand 4: typedef owner
     if (owner)
         dList.push_back(MDString::get(getGlobalContext(), owner->name));
     else
         dList.push_back(NULL);
+
+    // operand 5: instance var index
+    if (!gvar)
+        dList.push_back(constInt(ivar->index));
+    else
+        dList.push_back(NULL);
+
+    // we register with the cache map because a cached module may be
+    // on this depended one for this run
+    LLVMBuilder &b = dynamic_cast<LLVMBuilder &>(context.builder);
+    b.registerDef(context, sym);
 
     return MDNode::get(getGlobalContext(), dList);
 
@@ -258,9 +313,10 @@ MDNode *Cacher::writeVarDef(VarDef *sym, TypeDef *owner) {
 bool Cacher::readImports() {
 
     MDNode *mnode;
-    MDString *cname, *digest;
+    MDString *cname, *digest, *symStr;
     SourceDigest iDigest;
     BModuleDefPtr m;
+    VarDefPtr symVal;
     NamedMDNode *imports = modDef->rep->getNamedMetadata("crack_imports");
 
     assert(imports && "missing crack_imports node");
@@ -269,11 +325,11 @@ bool Cacher::readImports() {
 
         mnode = imports->getOperand(i);
 
-        // canonical name
+        // op 1: canonical name
         cname = dyn_cast<MDString>(mnode->getOperand(0));
         assert(cname && "malformed import node: canonical name");
 
-        // source digest
+        // op 2: source digest
         digest = dyn_cast<MDString>(mnode->getOperand(1));
         assert(digest && "malformed import node: digest");
 
@@ -284,17 +340,124 @@ bool Cacher::readImports() {
         if (m->digest != iDigest)
             return false;
 
+        // op 3..n: imported (namespace aliased) symbols from m
+        for (unsigned si = 2; si < mnode->getNumOperands(); ++si) {
+            symStr = dyn_cast<MDString>(mnode->getOperand(si));
+            assert(symStr && "malformed import node: symbol name");
+            symVal = m->lookUp(symStr->getString().str());
+            // if we failed to lookup the symbol, then something is wrong
+            // with our digest mechanism
+            assert(symVal.get() && "import: inconsistent state");
+            modDef->addAlias(symVal.get());
+        }
+
+
     }
 
     return true;
 
 }
 
+void Cacher::readVarDefGlobal(const std::string &sym,
+                        llvm::Value *rep,
+                        llvm::MDNode *mnode) {
+
+    // rep for gvar is the actual global
+
+    // operand 3: type name
+    MDString *typeStr = dyn_cast<MDString>(mnode->getOperand(3));
+    assert(typeStr && "readVarDefGlobal: invalid type string");
+
+    VarDefPtr vd = modDef->lookUp(typeStr->getString().str());
+    TypeDef *td = TypeDefPtr::rcast(vd);
+    assert(td && "readVarDefGlobal: type not found");
+
+    GlobalVariable *lg = dyn_cast<GlobalVariable>(rep);
+    assert(lg && "readVarDefGlobal: not GlobalVariable rep");
+    BGlobalVarDefImpl *impl = new BGlobalVarDefImpl(lg);
+
+    // the member def itself
+    VarDef *g = new VarDef(td, sym);
+    g->impl = impl;
+    modDef->addDef(g);
+
+    LLVMBuilder &b = dynamic_cast<LLVMBuilder &>(context.builder);
+    b.registerDef(context, g);
+
+}
+
+void Cacher::readVarDefMember(const std::string &sym,
+                        llvm::Value *rep,
+                        llvm::MDNode *mnode) {
+
+    // rep for instance var is null val for member type
+    // XXX rep unused?
+
+    // operand 3: member type name
+    MDString *typeStr = dyn_cast<MDString>(mnode->getOperand(3));
+    assert(typeStr && "readVarDefMember: invalid type string");
+
+    VarDefPtr vd = modDef->lookUp(typeStr->getString().str());
+    TypeDef *td = TypeDefPtr::rcast(vd);
+    assert(td && "readVarDefMember: type not found");
+
+    // operand 4: type owner (class we're a member of)
+    MDString *ownerStr = dyn_cast<MDString>(mnode->getOperand(4));
+    assert(ownerStr && "readVarDefMember: invalid owner");
+
+    VarDefPtr o = modDef->lookUp(ownerStr->getString().str());
+    assert(o && "readVarDefMember: owner not found");
+
+    TypeDef *otd = dynamic_cast<TypeDef*>(o.get());
+    assert(otd && "readVarDefMember: owner not type");
+
+    // operand 5: instance var index
+    ConstantInt *index = dyn_cast<ConstantInt>(mnode->getOperand(5));
+    assert(index && "readVarDefMember: no index");
+
+    BInstVarDefImpl *impl = new BInstVarDefImpl(index->getLimitedValue());
+
+    // the member def itself
+    VarDef *mbr = new VarDef(td, sym);
+    mbr->impl = impl;
+
+    otd->addDef(mbr);
+
+}
+
 void Cacher::readTypeDef(const std::string &sym,
+                         llvm::Value *rep,
                          llvm::MDNode *mnode) {
 
-    BTypeDef *t = new BTypeDef(NULL/* model meta type def */, sym, NULL /* XXX llvm type def */);
-    modDef->addDef(t);
+    // operand 3: metatype type (name string)
+    MDString *cname = dyn_cast<MDString>(mnode->getOperand(3));
+    assert(cname && "invalid metatype name");
+
+    // operand 4: metatype type (null initializer)
+    Value *mtrep = mnode->getOperand(4);
+    BTypeDefPtr metaType = new BTypeDef(0,
+                                        cname->getString().str(),
+                                        mtrep->getType(),
+                                        true,
+                                        0 /* nextVTableslot */
+                                        );
+
+    BTypeDefPtr type = new BTypeDef(metaType.get(),
+                        sym,
+                        rep->getType(),
+                        true,
+                        0 /* nextVTableslot */
+                        );
+
+    // tie the meta-class to the class
+    if (metaType)
+        metaType->meta = type.get();
+
+    // make the class default to initializing to null
+    type->defaultInitializer = new NullConst(type.get());
+    type->complete = true;
+
+    modDef->addDef(type.get());
 
 }
 
@@ -320,21 +483,32 @@ void Cacher::readFuncDef(const std::string &sym,
     assert(f && "malformed def node: llvm rep not function");
 
     // model funcdef
-    BFuncDef *newF = new BFuncDef((FuncDef::Flags)flags->getLimitedValue(),
+    // note we don't use FunctionBuilder here because we already have an
+    // llvm rep
+    size_t bargCount = f->getArgumentList().size();
+    FuncDef::Flags bflags = (FuncDef::Flags)flags->getLimitedValue();
+    if (bflags & FuncDef::method)
+        // if method, we adjust the BFuncDef for "this", which exists in
+        // llvm arguments but is only implied in BFuncDef
+        bargCount--;
+    BFuncDef *newF = new BFuncDef(bflags,
                                   sym,
-                                  f->getArgumentList().size());
+                                  bargCount);
     newF->rep = f;
 
+    Namespace *owner = 0;
     if (ownerStr) {
         VarDefPtr o = modDef->lookUp(ownerStr->getString().str());
         assert(o && "owner not found");
         TypeDef *td = dynamic_cast<TypeDef*>(o.get());
         assert(td && "owner not type");
-        newF->setOwner(td);
+        owner = td;
     }
     else {
-        newF->setOwner(modDef);
+        owner = modDef;
     }
+    newF->setOwner(owner);
+    newF->ns = owner;
 
     VarDefPtr vd = modDef->lookUp(rtStr->getString().str());
     TypeDef *td = TypeDefPtr::rcast(vd);
@@ -364,11 +538,14 @@ void Cacher::readFuncDef(const std::string &sym,
     }
 
     OverloadDef *o;
-    vd = modDef->lookUp(sym);
+    vd = owner->lookUp(sym);
     if (!vd) {
         o = new OverloadDef(sym);
         o->addFunc(newF);
-        modDef->addDef(o);
+        owner->addDef(o);
+
+        LLVMBuilder &b = dynamic_cast<LLVMBuilder &>(context.builder);
+        b.registerDef(context, newF);
     }
     else {
         o = OverloadDefPtr::rcast(vd);
@@ -411,14 +588,14 @@ void Cacher::readDefs() {
         case Cacher::method:
             readFuncDef(sym, rep, mnode);
             break;
+        case Cacher::member:
+            readVarDefMember(sym, rep, mnode);
+            break;
         case Cacher::global:
-            // XXX
+            readVarDefGlobal(sym, rep, mnode);
             break;
         case Cacher::type:
-            readTypeDef(sym, mnode);
-            break;
-        case Cacher::member:
-            // XXX
+            readTypeDef(sym, rep, mnode);
             break;
 
         default:

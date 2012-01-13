@@ -1755,8 +1755,8 @@ VarDefPtr LLVMBuilder::emitVarDef(Context &context, TypeDef *type,
 
     // reveal our type object
     BTypeDef *tp = BTypeDefPtr::cast(type);
-
-    // get the defintion context
+    
+    // get the definition context
     ContextPtr defCtx = context.getDefContext();
 
     // do initialization (unless we're in instance scope - instance variables
@@ -2655,14 +2655,15 @@ std::string LLVMBuilder::getSourcePath(const std::string &path) {
 
 }
 
-void LLVMBuilder::initializeImportCommon(model::ModuleDef* m) {
+void LLVMBuilder::initializeImportCommon(model::ModuleDef* m,
+                                      const std::vector<std::string> &symbols) {
 
     BModuleDef *importedMod = dynamic_cast<BModuleDef*>(m);
 
     assert(bModDef && "no bModDef before initializeImportCommon");
     assert(importedMod && "importedMod was not a BModuleDef");
 
-    bModDef->importList.push_back(importedMod);
+    bModDef->importList[importedMod] = symbols;
 
 }
 
