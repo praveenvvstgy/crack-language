@@ -18,6 +18,7 @@
 #include "builder/util/CacheFiles.h"
 #include "builder/util/SourceDigest.h"
 #include "builder/llvm/Consts.h"
+#include "builder/llvm/StructResolver.h"
 
 #include <assert.h>
 #include <sstream>
@@ -316,6 +317,13 @@ MDNode *Cacher::writeTypeDef(model::TypeDef* t) {
     Type *metaTypeRep = BTypeDefPtr::acast(metaClass)->rep;
     dList.push_back(Constant::getNullValue(metaTypeRep));
 
+    // register in canonical map for subsequent cache loads
+    if (bt)
+        context.construct->registerDef(bt);
+    else
+        context.construct->registerDef(t);
+    context.construct->registerDef(metaClass);
+
     return MDNode::get(getGlobalContext(), dList);
 
 }
@@ -505,13 +513,15 @@ bool Cacher::readImports() {
 
         iDigest = SourceDigest::fromHex(digest->getString().str());
 
-        // load this module. if the digest doesn't match, we miss
+        // load this module. if the digest doesn't match, we miss.
+        // note module may come from cache or parser, we won't know
         m = context.construct->loadModule(cname->getString().str());
         if (!m || m->digest != iDigest)
             return false;
 
         // op 3..n: imported (namespace aliased) symbols from m
-        for (unsigned si = 2; si < mnode->getNumOperands(); ++si) {
+        assert(mnode->getNumOperands() % 2 == 0);
+        for (unsigned si = 2; si < mnode->getNumOperands();) {
             localStr = dyn_cast<MDString>(mnode->getOperand(si++));
             sourceStr = dyn_cast<MDString>(mnode->getOperand(si++));
             assert(localStr && "malformed import node: missing local name");
@@ -744,6 +754,9 @@ void Cacher::readTypeDef(const std::string &sym,
                          llvm::Value *rep,
                          llvm::MDNode *mnode) {
 
+    PointerType *p = cast<PointerType>(rep->getType());
+    StructType *s = cast<StructType>(p->getElementType());
+
     BTypeDefPtr metaType = readMetaType(mnode);
     BTypeDefPtr type = new BTypeDef(metaType.get(),
                         sym,
@@ -753,6 +766,52 @@ void Cacher::readTypeDef(const std::string &sym,
                         );
     finishType(type.get(), metaType.get());
     assert(type->getOwner());
+
+    if (s->getName().str() != type->getFullName()) {
+
+        // if the type name does not match the structure name, we have the
+        // following scenario:
+        // A is cached, depends on type in B
+        // B is cached, defines type A wants
+        // A is loaded first, bitcode contains structure def from B with
+        // canonical name. Because it was loaded first, it goes into the LLVM
+        // context first. When B is loaded and the same canonical structure is
+        // loaded, it gets the postfix.
+        // The problem is, although A turned out to be the "authoritative" name
+        // for the struct according to LLVM context, it's not the authoritative place
+        // that it is defined in crack. So, we lookup the old one and remove the name.
+        // Then we set the struct name on ours (the authoritative location, because
+        // the crack type is defined here) to the proper canonical name without
+        // the postfix.
+
+        // old, nonauthoritative struct
+        StructType *old = modDef->rep->getTypeByName(type->getFullName());
+        // old must exist since otherwise we would have matched our sym name
+        // already
+        assert(old);
+        // we're also expecting that it matches the canonical name, which we
+        // want to steal
+        assert(old->getName() == type->getFullName());
+
+        //cout << "old name: " << old->getName().str() << "\n";
+
+        // remove the old name
+        old->setName("");
+
+        // steal canonical name to make our type authoritative
+        s->setName(type->getFullName());
+        //cout << "s name: " << s->getName().str() << "\n";
+
+        // now force a conflict so that the _old_ name is postfixed, and it
+        // will get cleaned up on a subsequent ResolveStruct run
+        old->setName(type->getFullName());
+        //cout << "old name now: " << old->getName().str() << "\n";
+        assert(old->getName() != s->getName());
+
+    }
+
+    assert(s->getName().str() == type->getFullName()
+           && "structure name didn't match canonical");
 
     // retrieve the class implementation pointer
     GlobalVariable *impl = modDef->rep->getGlobalVariable(type->getFullName());
@@ -1045,6 +1104,59 @@ void Cacher::writeBitcode(const string &path) {
 
 }
 
+void Cacher::resolveStructs(llvm::Module *module) {
+
+    // resolve duplicate structs to those already existing in our type
+    // system. this solves issues when using separate bitcode modules
+    // without using the llvm linker
+    StructResolver resolver(module);
+
+    // first we get the list we have to resolve
+    // then we lookup the canonical version of each one to create
+    // the map
+    StructResolver::StructMapType typeMap;
+    StructResolver::StructListType dSet = resolver.getDisjointStructs();
+    for (StructResolver::StructListType::iterator i = dSet.begin();
+         i != dSet.end(); ++i) {
+        int pos = i->first.rfind(".");
+        string canonical = i->first.substr(0, pos);        
+        // XXX big hack. meta's are created implicitly by class defs, so their
+        // corresponding class defs have to come first in this list else the
+        // metas won't exist in resolveType. defer them?
+        if (canonical.find("meta") != string::npos) {
+            //cout << "XXXXXXXXX skipping meta: " << canonical << "\n";
+            continue;
+        }
+        TypeDefPtr td = resolveType(canonical);
+        BTypeDef *bt = dynamic_cast<BTypeDef *>(td.get());
+        assert(bt);
+        // we want to map the struct (the ContainedType), not the pointer to it
+        PointerType *a = dyn_cast<PointerType>(bt->rep);
+        assert(a && "expected a PointerType");
+        // most classes are single indirection pointers-to-struct, but we have
+        // to special case VTableBase which is **
+        if (canonical == ".builtin.VTableBase") {
+            a = cast<PointerType>(a->getElementType());
+        }
+        StructType *left = dyn_cast<StructType>(i->second);
+        assert(left);
+        StructType *right = dyn_cast<StructType>(a->getElementType());
+        assert(right);
+        assert(left != right);
+        //cout << "struct map [" << left->getName().str() << "] to [" << right->getName().str() << "]\n";
+        typeMap[i->second] = a->getElementType();
+    }
+
+    // finally, we resolve using our map. this replaces all instances of
+    // the conflicting type from this module, with the original one actually
+    // in our type system
+    if (!typeMap.empty())
+        resolver.run(&typeMap);
+    else
+        cout << "resolveStructs: typemap was empty\n";
+
+}
+
 BModuleDefPtr Cacher::maybeLoadFromCache(const string &canonicalName,
                                          const string &path) {
 
@@ -1085,14 +1197,33 @@ BModuleDefPtr Cacher::maybeLoadFromCache(const string &canonicalName,
 
     if (readMetadata()) {
 
+        // after reading our metadata and defining types, we
+        // resolve all disjoint structs from our bitcode to those
+        // already in the crack type system
+        resolveStructs(module);
+
         // cache hit
         if (options->verbosity >= 2)
             cerr << "[" << canonicalName <<
                     "] cache materialized" << endl;
+
         return modDef;
     }
     else {
+
         // during meta data read, we determined we will miss
+
+        // ensure any named structs from the module that we miss on do not remain
+        // in the llvm context struct namespace
+        // XXX is this necessary? a module delete doesn't appear to affect
+        // the llvmcontext
+        vector<StructType*> namedStructs;
+        module->findUsedStructTypes(namedStructs);
+        for (int i=0; i < namedStructs.size(); ++i) {
+            if (namedStructs[i]->hasName())
+                namedStructs[i]->setName("");
+        }
+
         delete module;
         return NULL;
     }
