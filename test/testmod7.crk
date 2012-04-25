@@ -1,0 +1,15 @@
+## Test module for aliases
+## Copyright 2012 Google Inc.
+
+class A[T] {
+    T val;
+    oper init() { val = 123; }
+}
+alias AInt = A[int];
+
+class X {
+    int f() { return 123; }
+}
+int func() { return 456; }
+int gvar = 789;
+alias _private = gvar;
