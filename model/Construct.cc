@@ -174,7 +174,8 @@ std::string Construct::joinName(const std::string &base,
 
 Construct::Construct(Builder *builder, Construct *primary) :
     rootBuilder(builder),
-    uncaughtExceptionFunc(0) {
+    uncaughtExceptionFunc(0),
+    migrationWarnings(false) {
 
     if (builder->options->statsMode)
         stats = new ConstructStats();
@@ -464,17 +465,6 @@ ModuleDefPtr Construct::loadModule(Construct::StringVecIter moduleNameBegin,
     if (mapi != moduleCache.end())
         return mapi->second;
 
-    // load the parent module
-    StringVec::const_reverse_iterator rend(moduleNameEnd);
-    ++rend;
-    if (rend != StringVec::const_reverse_iterator(moduleNameBegin)) {
-        StringVecIter last(rend.base());
-        string parentCanonicalName;
-        ModuleDefPtr parent = loadModule(moduleNameBegin, last, 
-                                         parentCanonicalName
-                                         );
-    }
-    
     // look for a shared library
     ModulePath modPath = searchPath(sourceLibPath, moduleNameBegin,
                                     moduleNameEnd,
