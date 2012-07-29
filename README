@@ -1,0 +1,14 @@
+Copyright 2009 Google Inc.
+
+This is the the Crack Executor - it runs programs written in the Crack 
+scripting language.
+
+Crack is a language similar to C/C++/Java that compiles directly from a script 
+to machine code.
+
+See MPL-2.0.txt for the license.  The bulk of this code is under the Mozilla 
+Public License, version 2.0.  More formally:
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
