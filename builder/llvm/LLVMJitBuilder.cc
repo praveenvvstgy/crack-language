@@ -273,26 +273,6 @@ ModuleDefPtr LLVMJitBuilder::createModule(Context &context,
     return bModDef;
 }
 
-void LLVMJitBuilder::cacheModule(Context &context, ModuleDef *mod) {
-
-    assert(BModuleDefPtr::cast(mod)->rep == module);
-
-    // encode main function location in bitcode metadata
-    vector<Value *> dList;
-    NamedMDNode *node;
-
-    node = module->getOrInsertNamedMetadata("crack_entry_func");
-    dList.push_back(func);
-    node->addOperand(MDNode::get(getGlobalContext(), dList));
-
-    Cacher c(context,
-             context.construct->rootBuilder->options.get(),
-             BModuleDefPtr::cast(mod)
-             );
-    c.saveToCache();
-
-}
-
 void LLVMJitBuilder::innerCloseModule(Context &context, ModuleDef *moduleDef) {
     // if there was a top-level throw, we could already have a terminator.
     // Generate a return instruction if not.
@@ -352,24 +332,9 @@ void LLVMJitBuilder::innerCloseModule(Context &context, ModuleDef *moduleDef) {
     externals.clear();
 
     // build the debug tables
-    Module::FunctionListType &funcList = module->getFunctionList();
-    for (Module::FunctionListType::iterator funcIter = funcList.begin();
-         funcIter != funcList.end();
-         ++funcIter
-         ) {
-        string name = funcIter->getName();
-        if (!funcIter->isDeclaration())
-            crack::debug::registerDebugInfo(
-                execEng->getPointerToGlobal(funcIter),
-                name,
-                "",   // file name
-                0     // line number
-            );
-    }
+    buildDebugTables();
 
     doRunOrDump(context);
-    if (context.construct->cacheMode)
-        cacheModule(context, moduleDef);
 }
 
 void LLVMJitBuilder::doRunOrDump(Context &context) {
@@ -455,6 +420,24 @@ void LLVMJitBuilder::registerDef(Context &context, VarDef *varDef) {
 
 }
 
+void LLVMJitBuilder::buildDebugTables() {
+    // register debug info for the module
+    for (Module::iterator iter = module->begin();
+         iter != module->end();
+         ++iter
+         ) {
+        if (!iter->isDeclaration()) {
+            string name = iter->getName();
+            crack::debug::registerDebugInfo(
+                execEng->getPointerToGlobal(iter),
+                name,
+                "",   // file name
+                0     // line number
+            );
+        }
+    }
+}
+
 model::ModuleDefPtr LLVMJitBuilder::materializeModule(
     Context &context,
     const string &canonicalName,
@@ -532,6 +515,8 @@ model::ModuleDefPtr LLVMJitBuilder::materializeModule(
                 );
             }
         }
+
+        buildDebugTables();
 
         setupCleanup(bmod.get());
 

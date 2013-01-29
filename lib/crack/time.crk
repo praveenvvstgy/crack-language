@@ -156,7 +156,7 @@ class Date : Object, InternalDate {
 
    void formatTo(Formatter out) {
         out.write(strftime("%F %T"));
-        if (tm_isdst) out.write("DST");
+        if (tm_isdst) out.write(" DST");
    }
 }
 
