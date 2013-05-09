@@ -39,7 +39,7 @@ void VTableInfo::dump() {
         if (entries[i])
             entries[i]->dump();
         else
-            std::cerr << "null entry" << std::endl;
+            std::cerr << "null entry!" << std::endl;
     }
 }
 
@@ -67,11 +67,8 @@ void VTableBuilder::addToAncestor(BTypeDef *ancestor, BFuncDef *func) {
     // insert the function
     vector<Constant *> &entries = targetVTable->entries;
     accomodate(entries, func->vtableSlot);
-    Function *funcRep = func->getRep(*builder);
-    entries[func->vtableSlot] = 
-        (func->flags & FuncDef::abstract) ?
-            Constant::getNullValue(funcRep->getType()) :
-            (Constant*)funcRep;
+    Constant *funcRep = func->getRep(*builder);
+    entries[func->vtableSlot] = funcRep;
 }
 
 // add the function to all vtables.
@@ -82,11 +79,8 @@ void VTableBuilder::addToAll(BFuncDef *func) {
          ) {
         vector<Constant *> &entries = iter->second->entries;
         accomodate(entries, func->vtableSlot);
-        Function *funcRep = func->getRep(*builder);
-        entries[func->vtableSlot] =
-            (func->flags & FuncDef::abstract) ?
-                Constant::getNullValue(funcRep->getType()) :
-                (Constant*)funcRep;
+        Constant *funcRep = func->getRep(*builder);
+        entries[func->vtableSlot] = funcRep;
     }
 }
 
@@ -120,11 +114,6 @@ void VTableBuilder::createVTable(BTypeDef *type, const std::string &name,
 }
 
 void VTableBuilder::emit(BTypeDef *type) {
-    // add a trailing null pointer so that the vtable can
-    // be iterated safely
-    vtables.rbegin()->second->
-        entries.push_back(ConstantPointerNull::get(builder->llvmVoidPtrType));
-
     for (VTableMap::iterator iter = vtables.begin();
          iter != vtables.end();
          ++iter
@@ -144,10 +133,27 @@ void VTableBuilder::emit(BTypeDef *type) {
         }
 
         // create a constant structure that actually is the vtable
+        
+        // get the structure type from our global registry.
         StructType *vtableStructType =
-            StructType::create(getGlobalContext(), vtableTypes,
-                               iter->second->name
-                               );
+            LLVMBuilder::getLLVMType(iter->second->name);
+        if (!vtableStructType) {
+            vtableStructType =
+                StructType::create(getGlobalContext(), vtableTypes,
+                                   iter->second->name
+                                   );
+            LLVMBuilder::putLLVMType(iter->second->name, vtableStructType);
+        } else {
+            // sanity check the type we retrieved.
+            SPUG_CHECK(vtableTypes.size() == 
+                        vtableStructType->getNumElements(),
+                       "vtable type " << iter->second->name << 
+                        " has a differently sized body.  Want " <<
+                        vtableTypes.size() << ", got " <<
+                        vtableStructType->getNumElements()
+                       );
+        }
+
         type->vtables[iter->first] =
                 new GlobalVariable(*module, vtableStructType,
                                    true, // isConstant
@@ -197,9 +203,8 @@ void VTableBuilder::materialize(BTypeDef *type) {
             PointerType *pt = cast<PointerType>(gvar->getType());
             StructType *st = cast<StructType>(pt->getElementType());
             
-            // next vtable slot is the size of the table -1 (for the trailing 
-            // null entry)
-            type->nextVTableSlot = st->getNumElements() - 1;
+            // next vtable slot is the size of the table
+            type->nextVTableSlot = st->getNumElements();
         }
     }
 
