@@ -13,6 +13,7 @@
 #include <set>
 #include <vector>
 
+#include "NamespaceStub.h"
 // we need to include this because of TypeDef::TypeVecObj
 #include "TypeDef.h"
 
@@ -22,17 +23,16 @@ class Context;
 SPUG_RCPTR(OverloadDef);
 SPUG_RCPTR(ModuleStub);
 
-class ModuleStub : public ModuleDef {
+class ModuleStub : public ModuleDef, public NamespaceStub {
     public:
 
         struct Callback {
-            virtual void run() = 0;
+            virtual void run(Context &context) = 0;
         };
 
         typedef std::vector<Callback *> CallbackVec;
         CallbackVec callbacks;
 
-        ModuleDefPtr replacement;
         bool replacedAll;
 
         // modules that depend on the stub and need to be fixed.
@@ -48,20 +48,18 @@ class ModuleStub : public ModuleDef {
         virtual void callDestructor() {}
         virtual void runMain(builder::Builder &builder) {}
 
-        /**
-         * These functions get placeholders for symbols defined inside the
-         * module.
-         */
-        /** @{ */
-        TypeDefPtr getTypeStub(const std::string &name);
-        OverloadDefPtr getOverloadStub(const std::string &name);
-        VarDefPtr getVarStub(const std::string &name);
-        /** @} */
+        // Implements NamespaceStub.
+        virtual TypeDefPtr getTypeStub(const std::string &name);
+        virtual OverloadDefPtr getOverloadStub(const std::string &name);
+        virtual VarDefPtr getVarStub(const std::string &name);
+        virtual NamespaceStubPtr getTypeNSStub(const std::string &name);
+        virtual Namespace *getRealNamespace();
+        virtual ModuleDefPtr getModule();
 
         /**
-         * Replace this stub in all modules in 'dependents'.
+         * Replace this stub in all modules in 'dependents' with 'module'.
          */
-        void replace(Context &context);
+        void replace(Context &context, ModuleDef *replacement);
 
         virtual TypeDefPtr getType(const std::string &name);
 

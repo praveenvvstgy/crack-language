@@ -123,11 +123,19 @@ bool TypeDef::isHiddenScope() {
     return owner->isHiddenScope();
 }
 
+VarDef *TypeDef::asVarDef() {
+    return this;
+}
+
 NamespacePtr TypeDef::getParent(unsigned i) {
     if (i < parents.size())
         return parents[i];
     else
         return 0;
+}
+
+NamespacePtr TypeDef::getNamespaceOwner() {
+    return getOwner();
 }
 
 bool TypeDef::hasInstSlot() {
@@ -851,6 +859,29 @@ namespace {
             virtual void runMain(builder::Builder &builder) {}
             virtual bool isHiddenScope() { return true; }
     };
+    
+    // Callback to replace a stubbed instantiation in the instantiation cache 
+    // when its module is replaced.
+    struct FixStubbedInstantiation : public ModuleStub::Callback {
+        TypeDef::TypeVecObjPtr parms;
+        TypeDefPtr generic, instantiation;
+        FixStubbedInstantiation(TypeDef *generic, TypeDef *instantiation,
+                                TypeDef::TypeVecObj *parms
+                                ) :
+            parms(parms),
+            generic(generic),
+            instantiation(instantiation) {
+        }
+        
+        virtual void run(Context &context) {
+            TypeDef::SpecializationCache::iterator entry = 
+                generic->generic->find(parms.get());
+            
+            // make sure it hasn't already been replaced
+            if (entry->second == instantiation)
+                entry->second = instantiation->replaceStub(context);
+        }
+    };
 }
 
 TypeDefPtr TypeDef::getSpecialization(Context &context, 
@@ -939,8 +970,9 @@ TypeDefPtr TypeDef::getSpecialization(Context &context,
         modContext->generic = true;
         
         // create the new module with the current module as the owner.  Use 
-        // the newTypeName instead of moduleName, the name will be 
-        // canonicalized by its owner.    
+        // the newTypeName instead of moduleName, since this is how we should 
+        // have done it for modules in the first place and we're going to 
+        // override the canonical name later anyway.
         ModuleDef *currentModule = 
             ModuleDefPtr::rcast(context.getModuleContext()->ns);
         module = modContext->createModule(newTypeName, "", currentModule);
@@ -953,6 +985,12 @@ TypeDefPtr TypeDef::getSpecialization(Context &context,
         module->setOwner(
             genericInfo->getInstanceModuleOwner(context.isGeneric()).get()
         );
+
+        // Fix up the canonical name of the module.  The previous setOwner() 
+        // sets the canonical as if the module were directly owned by the 
+        // parent module, but that may not be the case if the generic is 
+        // defined in a nested context (e.g. in a class).
+        module->setNamespaceName(moduleName);
         
         instantiateGeneric(this, context, *modContext, types);
         
@@ -978,6 +1016,10 @@ TypeDefPtr TypeDef::getSpecialization(Context &context,
     // extract the type out of the newly created module and store it in the 
     // specializations cache
     result = extractInstantiation(module.get(), types);
+    if (result->isStub())
+        ModuleStubPtr::rcast(module)->registerCallback(
+            new FixStubbedInstantiation(this, result, types)
+        );
 
     // record a dependency on the owner's module
     context.ns->getModule()->addDependency(module.get());
