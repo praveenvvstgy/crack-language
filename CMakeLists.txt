@@ -33,7 +33,9 @@ MESSAGE( STATUS "CMAKE_MODULE_PATH: " ${CMAKE_MODULE_PATH} )
 
 MESSAGE( STATUS "CMAKE_SYSTEM_PROCESSOR: " ${CMAKE_SYSTEM_PROCESSOR} )
 
-Find_Package(LLVM REQUIRED)
+Find_Package(LLVM REQUIRED
+                  COMPONENTS core mcjit native bitreader bitwriter
+                             instrumentation ipo linker)
 IF(NOT LLVM_CONFIG_EXECUTABLE)
   MESSAGE(FATAL_ERROR "LLVM not found. Please install ${LLVM_MIN_VERSION_TEXT} "
                       "or greater, or set LLVM_DIR environment variable"

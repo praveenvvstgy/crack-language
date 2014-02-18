@@ -34,7 +34,7 @@
 #include <llvm/Analysis/Verifier.h>
 #include <llvm/Assembly/PrintModulePass.h>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/ExecutionEngine/JIT.h>  // link in the JIT
+#include <llvm/ExecutionEngine/MCJIT.h>  // link in the JIT
 #include <llvm/IR/Module.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Intrinsics.h>
@@ -555,7 +555,8 @@ ExecutionEngine *LLVMJitBuilder::bindJitModule(Module *mod) {
             EngineBuilder eb(mod);
             eb.setOptLevel(CodeGenOpt::Default).
                setEngineKind(EngineKind::JIT).
-               setAllocateGVsWithCode(false);
+               setAllocateGVsWithCode(false).
+               setUseMCJIT(true);
             TargetMachine *tm = eb.selectTarget();
             tm->Options.JITEmitDebugInfo = true;
 //             tm->Options.JITExceptionHandling = true;
