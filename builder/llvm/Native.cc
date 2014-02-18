@@ -31,8 +31,8 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Linker.h>
+#include <llvm/Support/Path.h>
 #include <llvm/Support/Program.h>
-#include <llvm/Support/PathV1.h>
 #include <llvm/Support/Host.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/ToolOutputFile.h>
@@ -76,7 +76,7 @@ static int GenerateNative(const std::string &OutputFilename,
                           const std::string &InputFilename,
                           const vector<std::string> &LibPaths,
                           const ItemList &LinkItems,
-                          const sys::Path &gcc, char ** const envp,
+                          const std::string &gcc, char ** const envp,
                           std::string& ErrMsg,
                           bool is64Bit,
                           const BuilderOptions *o) {
@@ -171,7 +171,7 @@ static int GenerateNative(const std::string &OutputFilename,
   }
 
   // Run the compiler to assembly and link together the program.
-  int R = sys::Program::ExecuteAndWait(
+  int R = sys::ExecuteAndWait(
     gcc, &Args[0], 0, 0, 0, 0, &ErrMsg);
 
   return R;
@@ -560,7 +560,6 @@ void optimizeUnit(llvm::Module *module, int optimizeLevel) {
     // Break up aggregate allocas, using SSAUpdater.
     Passes.add(createScalarReplAggregatesPass(-1, false));
     Passes.add(createEarlyCSEPass());  // Catch trivial redundancies
-    Passes.add(createSimplifyLibCallsPass());  // Library Call Optimizations
     Passes.add(createJumpThreadingPass());  // Thread jumps.
     Passes.add(createCorrelatedValuePropagationPass());  // Propagate conditionals
     Passes.add(createCFGSimplificationPass());  // Merge & remove BBs
@@ -616,29 +615,32 @@ void nativeCompile(llvm::Module *module,
     BuilderOptions::StringMap::const_iterator i = o->optionMap.find("out");
     assert(i != o->optionMap.end() && "no out");
 
-    sys::Path oFile(i->second);
-    sys::Path binFile(i->second);
+    std::string oFile(i->second);
+    std::string binFile(i->second);
 
     // see if we should output an object file/native binary,
     // native assembly, or llvm bitcode
     TargetMachine::CodeGenFileType cgt = TargetMachine::CGFT_ObjectFile;
     bool doBitcode(false);
-    oFile.appendSuffix("o");
 
     i = o->optionMap.find("codeGen");
     if (i != o->optionMap.end()) {
         if (i->second == "llvm") {
             // llvm bitcode
-            oFile.eraseSuffix();
-            oFile.appendSuffix("bc");
+            oFile.append(".bc");
             doBitcode = true;
         }
         else if (i->second == "asm") {
             // native assembly
-            oFile.eraseSuffix();
-            oFile.appendSuffix("s");
+            oFile.append(".s");
             cgt = TargetMachine::CGFT_AssemblyFile;
         }
+        else {
+            oFile.append(".o");
+        }
+    }
+    else {
+        oFile.append(".o");
     }
 
     InitializeNativeTarget();
@@ -694,11 +696,9 @@ void nativeCompile(llvm::Module *module,
     Target.setAsmVerbosityDefault(true);
 
     std::string error;
-    unsigned OpenFlags = 0;
-    OpenFlags |= raw_fd_ostream::F_Binary;
-    tool_output_file *FDOut = new tool_output_file(oFile.str().c_str(),
+    tool_output_file *FDOut = new tool_output_file(oFile.c_str(),
                                                    Err,
-                                                   OpenFlags);
+                                                   sys::fs::F_Binary);
     if (!Err.empty()) {
         cerr << error << '\n';
         delete FDOut;
@@ -711,7 +711,7 @@ void nativeCompile(llvm::Module *module,
         // note, we expect optimizations to be done by now, so we don't do
         // any here
         if (o->verbosity)
-            cerr << "Generating file:\n" << oFile.str() << "\n";
+            cerr << "Generating file:\n" << oFile << "\n";
 
         if (doBitcode) {
             // llvm bitcode
@@ -743,8 +743,8 @@ void nativeCompile(llvm::Module *module,
         return;
 
     // if we reach here, we finish generating a native binary with gcc
-    sys::Path gcc = sys::Program::FindProgramByName("gcc");
-    assert(!gcc.isEmpty() && "Failed to find gcc");
+    std::string gcc = sys::FindProgramByName("gcc");
+    assert(!gcc.empty() && "Failed to find gcc");
 
     vector<string> LibPaths(libPaths);
 
@@ -773,16 +773,17 @@ void nativeCompile(llvm::Module *module,
                                                     ));
 #else
         string rtp = string(path::stem(*i)) + string(path::extension(*i));
-        Path sPath;
+        std::string sPath;
         bool foundModule = false;
 
         // We have to manually search for the linkitem
         for (unsigned index = 0; index < LibPaths.size(); index++) {
-            sPath = Path(LibPaths[index]);
-            sPath.appendComponent(rtp);
+            sPath = LibPaths[index];
+            sPath.append("/");
+            sPath.append(rtp);
 
             if (o->verbosity > 2)
-                cerr << "search: " << sPath.str() << endl;
+                cerr << "search: " << sPath << endl;
 
             char *rp = realpath(sPath.c_str(), NULL);
             if (!rp) {
@@ -805,7 +806,7 @@ void nativeCompile(llvm::Module *module,
         }
 
         NativeLinkItems.push_back(
-            pair<string,bool>(foundModule ? sPath.str() : rtp, false)
+            pair<string,bool>(foundModule ? sPath : rtp, false)
         );
 
 #endif
@@ -827,8 +828,8 @@ void nativeCompile(llvm::Module *module,
     char **envp = ::environ;
 #endif
 
-    GenerateNative(binFile.str(),
-                   oFile.str(),
+    GenerateNative(binFile,
+                   oFile,
                    LibPaths,
                    NativeLinkItems,
                    gcc,
