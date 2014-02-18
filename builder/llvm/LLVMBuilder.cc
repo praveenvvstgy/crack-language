@@ -2391,7 +2391,7 @@ void LLVMBuilder::cacheModule(Context &context, ModuleDef *module) {
                                    module->getNamespaceName(),
                                    "bc"
                                    );
-    tool_output_file out(path.c_str(), errors, 0);
+    tool_output_file out(path.c_str(), errors, llvm::sys::fs::F_None);
     if (errors.size())
         throw spug::Exception(errors);
 

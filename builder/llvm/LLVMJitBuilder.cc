@@ -549,6 +549,8 @@ ExecutionEngine *LLVMJitBuilder::bindJitModule(Module *mod) {
             // deprecated in the docs for this function, this option causes
             // seg-faults when we allocate globals under certain conditions.
             InitializeNativeTarget();
+            InitializeNativeTargetAsmPrinter();
+            InitializeNativeTargetAsmParser();
 
             EngineBuilder eb(mod);
             eb.setOptLevel(CodeGenOpt::Default).
@@ -556,10 +558,9 @@ ExecutionEngine *LLVMJitBuilder::bindJitModule(Module *mod) {
                setAllocateGVsWithCode(false);
             TargetMachine *tm = eb.selectTarget();
             tm->Options.JITEmitDebugInfo = true;
-            tm->Options.JITExceptionHandling = true;
+//             tm->Options.JITExceptionHandling = true;
 
             execEng = eb.create(tm);
-
         }
     }
 

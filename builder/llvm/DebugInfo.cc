@@ -48,7 +48,7 @@ void DebugInfo::emitFunctionDef(const std::string &name,
         name,
         currentFile,
         loc ? loc.getLineNumber() : 0,
-        llvm::DIType(),
+        llvm::DICompositeType(),
         false, // local to unit (i.e. like C static)
         true, // is definition,
         0 // scope line

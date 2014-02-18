@@ -1004,12 +1004,9 @@ void Cacher::writeBitcode(const string &path) {
     Module *module = modDef->rep;
 
     std::string Err;
-    unsigned OpenFlags = 0;
-    OpenFlags |= raw_fd_ostream::F_Binary;
-
     tool_output_file *FDOut = new tool_output_file(path.c_str(),
                                                    Err,
-                                                   OpenFlags);
+                                                   sys::fs::F_Binary);
     if (!Err.empty()) {
         cerr << Err << '\n';
         delete FDOut;
